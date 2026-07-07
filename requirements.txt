@@ -12,3 +12,6 @@ mysql-connector-python
 scipy
 tornado
 statsmodels
+scikit-learn
+lightgbm
+pyarrow

@@ -1,51 +1,60 @@
-# Template Python Project
-*brief description of purpose & functionality*
-A boilerplate TEMPLATE for Python projects
+# swing-repertoire
+
+Research on MLB swing shapes using Statcast bat tracking (2024+): (1) grading the run value of
+each hitter's individual swing shapes conditioned on the situation, and (2) testing whether a
+wider, more *adjustable* swing repertoire actually improves outcomes.
+
+Data source: Driveline `mlb_db` (Statcast bat tracking, MLB 2024+). See `docs/research-design.md`
+for the full design, data reality, methodology, limitations, and milestones (design doc is kept
+locally / not published to this repo).
+
+### Two facets
+1. **Swing-shape value** — per-batter GMM clusters swing shapes; a bespoke xRV model assigns each
+   shape a run value conditioned on count, pitch location, pitch type, and base-out state.
+2. **Repertoire diversity** — batter-level metrics for repertoire size, usage entropy, shape
+   dispersion, and context-responsiveness; tests whether adjustability pays off.
 
 ### Usage
+Scripts are standalone pipeline stages, run in order from the repo root:
 ```bash
-python main.py <args>
+python src/extract.py     # mlb_db -> data/swings_2024_2026_mlb.parquet + profile.md
+python src/features.py    # competitive-swing filter -> data/swings_model.parquet
+python src/cluster.py     # per-batter GMM -> data/cluster_* + batter_repertoire + catalog
 ```
+Pipeline order: `extract → features → cluster → (xrv → value_model → within_batter → diversity →
+reports, not yet built)`.
 
 ## Details
-- **Project Owner:** *name*
-- **Project's Notion Page:** [https://notion.so](https://notion.so)
-- **Project's Slack Channel:** `#proj-project-name`
+- **Project Owner:** Theo Au-Yeung
+- **Project's Notion Page:** [https://notion.so](https://notion.so) *(TBD)*
+- **Project's Slack Channel:** `#proj-swing-repertoire` *(TBD)*
 
 ## Contributors
-* [@author](Author)
+* [@theoauyeung](https://github.com/theoauyeung)
 
 ## Getting Started
 
-To get started, **create a new repository from this template** and **clone the repository** to your local machine.
-
 ### Setup the environment
-1. Open `environment.yml` and edit `name:` to match your project's name
-2. Create the conda VENV for the project and install the required packages
+Create the conda VENV and install the required packages:
 ```bash
 conda env create -f environment.yml
+conda activate swing_repertoire
 ```
-### Setup teh project
-3. Rename `.config.TEMPLATE` to `.config` and edit it so it works w/your local machine (edit directories/paths)
-4. ~~Rename `.env.TEMPLATE` to `.env` and update it with your assigned credentials (LOCAL/DEV SETUP section)~~
 
-### Setup the IDE
-5. Edit `python.analysis.extraPaths` in `.vscode/settings.json` to point to where you cloned the `drivepy` repo
+### Setup the project
+- `data/` (gitignored) holds all extracts. It is **never committed** — it contains player data.
+- DB credentials resolve from `~/.claude/.env` as `BIOMECH_DB_HOST/PORT/USER/PASS` via the
+  `get_secret()` helper in `src/extract.py` (the `mlb-db-analysis` skill convention). This project
+  reads creds from that file rather than a repo-local `.env`; the template `.config`/`.env`
+  scaffolding is retained but unused by the pipeline scripts. Read-only user, database `mlb_db`.
 
 ### Test-run
-6. Activate the VENV in your terminal and test the project
 ```bash
-conda activate project_name
-python main.py test_argument
+python src/extract.py
 ```
 
 ## ⚠️ IMPORTANT ⚠️
-Please try your best to adhere to the following standards:
-- Use `snake_case` for variable names
-- Use `camelCase` for function names
-  - The first word (lowercase) should be a verb that describes the action it takes. (e.g. `parseData()`)
-- Define constants near the top of the file, below imports/setup, with `UPPER_CASE_LIKE_THIS`
-- Store secrets, credentials, or confidential information in `.env`.
-  - Use them in the script with `os.environ`.  (e.g. `os.environ['GITHUB_TOKEN']`)
-- Store any configuration variables (information that changes from machine to machine) in `.config`
-  - Reference them in the script with `cfg`. (e.g. `cfg.DRIVEPY_PATH`)
+Repo conventions (from the Driveline project template):
+- Use `snake_case` for variable names; store constants in `UPPER_CASE` near the top of the file.
+- Store secrets/credentials in `.env` (or `~/.claude/.env` for this project); never in a `.py` file.
+- Store machine-specific configuration in `.config`.

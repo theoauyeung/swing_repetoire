@@ -1,4 +1,4 @@
-name: python-project
+name: swing_repertoire
 dependencies:
   - python=3.9
   - rich
@@ -15,3 +15,6 @@ dependencies:
   - scipy
   - tornado
   - statsmodels
+  - scikit-learn
+  - lightgbm
+  - pyarrow
