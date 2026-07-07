@@ -1,7 +1,0 @@
-############################### CONFIG SETTINGS ################################
-# if you need to provide config/editable settings for your script, you can store
-# and configure them here.
-
-REPOS_FOLDER=C:/Users/username/Documents/repos
-DRIVEPY_PATH=C:/path/to/repo/for/drivepy/
-DATA_SOURCE_PATH=/path/to/data.csv
