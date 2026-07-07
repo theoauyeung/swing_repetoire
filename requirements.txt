@@ -1,0 +1,14 @@
+rich
+python-dotenv
+numpy
+pandas
+matplotlib
+seaborn
+pygam
+sshtunnel
+sqlalchemy
+requests
+mysql-connector-python
+scipy
+tornado
+statsmodels
