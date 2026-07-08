@@ -20,12 +20,28 @@ are settled and should not be relitigated. `docs/worklog.md` tracks what's actua
 
 ## Environment & commands
 
+This project uses the **shared `driveline` venv** at `~/.venvs/driveline` (uv-managed, based on
+miniforge CPython 3.13) — one env reused across Driveline workflow, not a project-local `.venv`.
+The IDE is pointed at it via `.vscode/settings.json` (`python.defaultInterpreterPath`), and a
+matching Jupyter kernel is registered as **"Python (driveline)"** (`--name driveline`). Select
+that kernel for `.ipynb` files.
+
 ```
-uv venv
-uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy mysql-connector-python
+# one-time setup (already done on this machine):
+uv venv ~/.venvs/driveline --python <miniforge python> --prompt driveline
+VIRTUAL_ENV=~/.venvs/driveline uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy \
+    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel
+
+# activate for a terminal session (Git Bash):
+source ~/.venvs/driveline/Scripts/activate
+# to add a package later:
+VIRTUAL_ENV=~/.venvs/driveline uv pip install <pkg>
 ```
 
-Run pipeline stages from repo root (each reads/writes `data/`):
+`tabulate` is required (`cluster.py`'s `.to_markdown()`); `matplotlib` for the viz notebook;
+`jinja2` for pandas `.style` (heatmaps in `cluster_results.ipynb`).
+
+Run pipeline stages from repo root with the `driveline` env active (each reads/writes `data/`):
 
 ```
 python src/extract.py     # mlb_db -> swings_2024_2026_mlb.parquet + profile.md (slow: full DB pull)
@@ -54,11 +70,19 @@ DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` 
   mirrored, + = pull) so L/R hitters share a frame. Intercept *location* coords are deliberately
   excluded from shape (98–99% pitch-location artifact); `ball_bat_intercept_y` is kept only as a
   separate timing descriptor, never in the shape vector or as an xRV mediator.
-- **Clusters are strictly per-batter and NOT comparable across hitters.** Cluster 0 = the hitter's
-  primary (highest-usage) swing. All cross-hitter analysis must use batter-level scalars
+- **Clustering unit = `(batter_id, batter_stand)`, NOT batter alone.** A switch hitter's L and R
+  swings are different movements, so each stance clusters (and enters Facet 2) as its own
+  "player" — Cal Raleigh L vs Cal Raleigh R. Only `horz_attack_angle` is handedness-mirrored;
+  pooling both stances would make the GMM separate on stance instead of shape. All three outputs
+  carry `batter_stand`; `batter_repertoire` / `cluster_summary` also carry a display `label` that
+  suffixes the stance **only for switch hitters** ("Cal Raleigh (L)"), leaving one-way hitters
+  bare ("Aaron Judge").
+- **Clusters are strictly per-unit and NOT comparable across units.** Cluster 0 = that unit's
+  primary (highest-usage) swing. All cross-unit analysis must use unit-level scalars
   (`batter_repertoire.parquet`), never shared cluster IDs.
 - **GMM k selection is pure minimum-BIC** (early-stop, no arbitrary occupancy floors); the only
-  bound is the identifiability cap `k_max = n // 20`. Cohort = ≥300 pooled competitive swings.
+  bound is the identifiability cap `k_max = n // 20`. Cohort = ≥150 competitive swings **per
+  `(batter, stand)` unit** (lowered from pooled-300 to keep switch hitters' weaker side).
 - **Known confound:** count-based diversity metrics (`k`, `effective_shapes`) correlate with
   `n_swings` (r≈0.71) — must be sample-size-controlled before Facet 2. `shape_dispersion` is
   exempt (confirmed ~orthogonal to `n_swings`).

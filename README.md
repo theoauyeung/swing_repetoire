@@ -35,10 +35,15 @@ reports, not yet built)`.
 ## Getting Started
 
 ### Setup the environment
-Create the conda VENV and install the required packages:
+This project uses the **shared `driveline` uv venv** (`~/.venvs/driveline`) — one environment
+reused across Driveline workflow. Activate it, or select the **"Python (driveline)"** kernel in
+your IDE / for notebooks. To (re)create it:
 ```bash
-conda env create -f environment.yml
-conda activate swing_repertoire
+uv venv ~/.venvs/driveline --prompt driveline
+VIRTUAL_ENV=~/.venvs/driveline uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy \
+    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel
+python -m ipykernel install --user --name driveline --display-name "Python (driveline)"
+source ~/.venvs/driveline/Scripts/activate   # Git Bash; Windows: ~/.venvs/driveline/Scripts/activate.bat
 ```
 
 ### Setup the project

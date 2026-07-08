@@ -1,7 +1,6 @@
 {
-    "python.analysis.extraPaths": [
-        "/Users/UserName/Documents/repos/driveline/drivepy"
-    ],
+    "python.defaultInterpreterPath": "${userHome}/.venvs/driveline/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
     "python.testing.unittestArgs": [
         "discover",
         "-v",
@@ -12,4 +11,5 @@
     ],
     "python.testing.pytestEnabled": false,
     "python.testing.unittestEnabled": true,
+    "python-envs.defaultEnvManager": "ms-python.python:venv"
 }

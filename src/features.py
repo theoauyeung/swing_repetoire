@@ -6,8 +6,11 @@ Competitive swing (operational definition, no DB flag exists):
   - bat_speed >= 50 mph  (removes checked/emergency/defensive swings)
 
 Also mirrors horizontal attack angle by handedness so L/R hitters share a frame
-(+ = pull side); a per-batter constant so it does not change within-batter clustering,
-but keeps the later cross-batter reference map consistent.
+(+ = pull side). It is a per-(batter, stand) constant — clustering keys on
+(batter_id, batter_stand), so within a clustered unit the sign is fixed and the mirror does
+not affect within-unit clustering, while keeping the later cross-batter reference map
+consistent. (For a switch hitter the sign flips between their L and R units, which is why the
+two stances must be clustered separately — see cluster.py.)
 
 Input:  data/swings_2024_2026_mlb.parquet
 Output: data/swings_model.parquet  (competitive tracked swings, features + context + value)

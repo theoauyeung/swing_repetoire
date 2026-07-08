@@ -1,6 +1,13 @@
-""" per-batter swing-shape clustering via Gaussian Mixture Models.
+""" per-(batter, stand) swing-shape clustering via Gaussian Mixture Models.
 
-For each qualifying hitter (>= MIN_SWINGS competitive tracked swings, 2024-26 pooled):
+Clustering unit = (batter_id, batter_stand). A switch hitter's left- and right-handed swings
+are different movements; pooling them would let stance dominate the GMM (cluster 0 = "bats L",
+cluster 1 = "bats R" instead of real swing shapes). So each stance is clustered as its own
+"player" — Cal Raleigh L vs Cal Raleigh R. One-way hitters have a single stance and are
+unaffected. Only horz_attack_angle is handedness-mirrored; the other four features are not,
+which is exactly why an unsplit switch hitter separates on stance.
+
+For each qualifying unit (>= MIN_SWINGS competitive tracked swings, 2024-26 pooled):
   - z-score the 5 shape features within that hitter,
   - fit full-covariance GMMs for increasing k and select k by minimum BIC (early-stopping
     once BIC stops improving). 
@@ -13,9 +20,9 @@ For each qualifying hitter (>= MIN_SWINGS competitive tracked swings, 2024-26 po
 
 Input:  data/swings_model.parquet
 Outputs:
-  data/cluster_assignments.parquet  one row per swing: play_id, batter_id, cluster, resp_max
-  data/cluster_summary.parquet      one row per (batter, cluster): weight, n, raw centroid
-  data/batter_repertoire.parquet    one row per batter: k, bic, usage entropy, effective shapes,
+  data/cluster_assignments.parquet  one row per swing: play_id, batter_id, batter_stand, cluster, resp_max
+  data/cluster_summary.parquet      one row per (batter, stand, cluster): weight, n, raw centroid
+  data/batter_repertoire.parquet    one row per (batter, stand): k, bic, usage entropy, effective shapes,
                                     shape_dispersion (within-batter Mahalanobis separation of shapes)
   data/cluster_catalog.md           human-readable summary
 
@@ -33,7 +40,9 @@ FEATURES = ["swing_path_tilt", "swing_length", "bat_speed",
             "vert_attack_angle", "horz_attack_angle_pull"]
 RAW_CENTROID_COLS = ["swing_path_tilt", "swing_length", "bat_speed",
                      "vert_attack_angle", "horz_attack_angle"]  # report raw (unmirrored) centroids
-MIN_SWINGS = 300      # cohort threshold (pooled competitive swings)
+MIN_SWINGS = 150      # cohort threshold, applied per (batter_id, batter_stand) unit. Lowered from
+                      # the pooled-300 rule (research-design.md) so a switch hitter's weaker side
+                      # still qualifies; k_max = n // 20 still allows up to 7 shapes at n=150.
 D = len(FEATURES)
 PARAMS_PER_COMP = D + D * (D + 1) // 2   # free params of a full-cov Gaussian in D dims (=20 for D=5)
 PATIENCE = 3          # stop searching k once BIC fails to improve this many times in a row
@@ -98,42 +107,51 @@ def shape_dispersion(means, covs, weights):
 
 def main():
     df = pd.read_parquet(DATA / "swings_model.parquet",
-                         columns=["play_id", "batter_id", "batter_full_name"] + FEATURES + ["horz_attack_angle"])
-    per = df.groupby("batter_id").size()
+                         columns=["play_id", "batter_id", "batter_full_name", "batter_stand"]
+                                 + FEATURES + ["horz_attack_angle"])
+    KEY = ["batter_id", "batter_stand"]
+    per = df.groupby(KEY).size()
     cohort = per[per >= MIN_SWINGS].index
-    df = df[df.batter_id.isin(cohort)].copy()
-    print(f"Cohort: {len(cohort)} batters, {len(df):,} swings (>= {MIN_SWINGS} each)")
+    df = df[pd.MultiIndex.from_frame(df[KEY]).isin(cohort)].copy()
+    # switch hitters = qualifying batters with both stances in the cohort; only they get the
+    # (L)/(R) suffix on their display label (one-way hitters keep their bare name).
+    stands_per_batter = df.groupby("batter_id")["batter_stand"].nunique()
+    switch_ids = set(stands_per_batter[stands_per_batter == 2].index)
+    print(f"Cohort: {len(cohort)} (batter, stand) units, {len(df):,} swings (>= {MIN_SWINGS} each); "
+          f"{len(switch_ids)} switch hitters clustered as two units each")
 
     assign_rows, summary_rows, batter_rows = [], [], []
-    for i, (bid, g) in enumerate(df.groupby("batter_id", sort=False)):
+    for i, ((bid, stand), g) in enumerate(df.groupby(KEY, sort=False)):
         X = g[FEATURES].to_numpy(float)
         labels, resp_max, mu, sd, k, bic, disp = fit_batter(X)
         name = g["batter_full_name"].iloc[0]
+        label = f"{name} ({stand})" if bid in switch_ids else name
 
         gg = g.assign(cluster=labels)
         assign_rows.append(pd.DataFrame({
-            "play_id": g["play_id"].values, "batter_id": bid,
+            "play_id": g["play_id"].values, "batter_id": bid, "batter_stand": stand,
             "cluster": labels, "resp_max": resp_max.round(3),
         }))
 
         weights = np.bincount(labels, minlength=k) / len(labels)
         for c in range(k):
             sub = gg[gg.cluster == c]
-            row = {"batter_id": bid, "batter_full_name": name, "cluster": c,
-                   "n": len(sub), "weight": round(weights[c], 4)}
+            row = {"batter_id": bid, "batter_stand": stand, "batter_full_name": name,
+                   "label": label, "cluster": c, "n": len(sub), "weight": round(weights[c], 4)}
             row.update({f"{col}_mean": round(sub[col].mean(), 3) for col in RAW_CENTROID_COLS})
             summary_rows.append(row)
 
         w = weights[weights > 0]
         entropy = float(-(w * np.log(w)).sum())
-        batter_rows.append({"batter_id": bid, "batter_full_name": name, "n_swings": len(labels),
+        batter_rows.append({"batter_id": bid, "batter_stand": stand, "batter_full_name": name,
+                            "label": label, "n_swings": len(labels),
                             "k": k, "bic": round(bic, 1), "min_weight": round(weights.min(), 4),
                             "min_comp_n": int(np.bincount(labels).min()),
                             "usage_entropy": round(entropy, 3),
                             "effective_shapes": round(float(np.exp(entropy)), 2),
                             "shape_dispersion": round(disp, 3)})
         if (i + 1) % 100 == 0:
-            print(f"  ...{i+1}/{len(cohort)} batters")
+            print(f"  ...{i+1}/{len(cohort)} units")
 
     assignments = pd.concat(assign_rows, ignore_index=True)
     summary = pd.DataFrame(summary_rows)
@@ -149,8 +167,9 @@ def main():
 def write_catalog(rep, summary):
     L = []
     w = L.append
-    w("# Swing-shape cluster catalog (per-batter GMM)\n")
-    w(f"- Cohort: **{len(rep)} batters**, **{int(rep.n_swings.sum()):,} swings**")
+    w("# Swing-shape cluster catalog (per-(batter, stand) GMM)\n")
+    w(f"- Cohort: **{len(rep)} (batter, stand) units**, **{int(rep.n_swings.sum()):,} swings** "
+      f"(switch hitters contribute one unit per stance)")
     w(f"- Repertoire size (k) — mean {rep.k.mean():.2f}, median {int(rep.k.median())}")
     w(f"- Effective shapes (exp usage-entropy) — mean {rep.effective_shapes.mean():.2f}")
     w(f"- Shape dispersion (usage-wtd mean pairwise within-cluster Mahalanobis) — "
@@ -171,25 +190,25 @@ def write_catalog(rep, summary):
 
     w("## Widest repertoires (most effective shapes)")
     top = rep.sort_values("effective_shapes", ascending=False).head(10)
-    w(top[["batter_full_name", "n_swings", "k", "effective_shapes", "shape_dispersion"]]
+    w(top[["label", "n_swings", "k", "effective_shapes", "shape_dispersion"]]
       .to_markdown(index=False) + "\n")
 
     w("## Most distinct repertoires (shapes most separated from each other, >=800 swings)")
     disp = rep[rep.n_swings >= 800].sort_values("shape_dispersion", ascending=False).head(10)
-    w(disp[["batter_full_name", "n_swings", "k", "effective_shapes", "shape_dispersion"]]
+    w(disp[["label", "n_swings", "k", "effective_shapes", "shape_dispersion"]]
       .to_markdown(index=False) + "\n")
 
     w("## Most one-note hitters (fewest effective shapes, >=800 swings)")
     mono = rep[rep.n_swings >= 800].sort_values("effective_shapes").head(10)
-    w(mono[["batter_full_name", "n_swings", "k", "effective_shapes"]].to_markdown(index=False) + "\n")
+    w(mono[["label", "n_swings", "k", "effective_shapes"]].to_markdown(index=False) + "\n")
 
-    # one worked example: highest-k hitter's cluster centroids in real units
-    ex_id = rep.sort_values(["k", "n_swings"], ascending=False).iloc[0].batter_id
-    ex = summary[summary.batter_id == ex_id].sort_values("cluster")
-    ex_name = ex.batter_full_name.iloc[0]
-    w(f"## Example repertoire — {ex_name} (raw-unit cluster centroids)")
+    # one worked example: highest-k unit's cluster centroids in real units
+    ex = rep.sort_values(["k", "n_swings"], ascending=False).iloc[0]
+    ex_rows = summary[(summary.batter_id == ex.batter_id) &
+                      (summary.batter_stand == ex.batter_stand)].sort_values("cluster")
+    w(f"## Example repertoire — {ex.label} (raw-unit cluster centroids)")
     cols = ["cluster", "n", "weight"] + [f"{c}_mean" for c in RAW_CENTROID_COLS]
-    w(ex[cols].to_markdown(index=False))
+    w(ex_rows[cols].to_markdown(index=False))
 
     (DATA / "cluster_catalog.md").write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
