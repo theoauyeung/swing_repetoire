@@ -54,7 +54,7 @@ def connect():
 QUERY = f"""
 SELECT
   r.play_id, r.game_pk, r.game_date, r.game_year,
-  r.batter_id, r.batter_full_name, r.batter_stand, r.pitcher_id,
+  r.batter_id, r.batter_full_name, r.batter_stand, r.pitcher_id, r.pitcher_throws,
   r.at_bat_number, r.pitch_number, r.pitch_type,
   r.balls, r.strikes, r.outs_when_up,
   r.plate_x, r.plate_z, r.plate_zone,

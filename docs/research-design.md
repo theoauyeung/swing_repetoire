@@ -125,8 +125,12 @@ Note `bat_speed`'s low trait share (0.126): included per decision, but expect it
 
 **Preprocessing:**
 - Normalize height-dependent features by the strike zone: express `plate_z` and
-  `ball_intercept_z` relative to `sz_top`/`sz_bot`. Mirror horizontal features by
-  `batter_stand` so L/R hitters share a frame.
+  `ball_intercept_z` relative to `sz_top`/`sz_bot`. Put horizontal features in a pull frame
+  (+ = pull, both hands) so L/R hitters share a frame — but the transform differs by metric
+  (validated vs `bearing_angle`, worklog 2026-07-09): `horz_attack_angle` is *batter-relative*, so
+  the pull frame is a **uniform negation** (no per-hand mirror); `plate_x` is *absolute* (catcher
+  frame), so it needs a **real per-hand flip** (flip RHH). An early bug applied one shared per-hand
+  mirror to both, leaving RHH attack-direction inverted.
 - Standardize (z-score) each feature *within batter* before clustering (a batter's own shape
   spread, not league spread, defines their clusters).
 - Outlier handling: drop physically impossible values (bat_speed <30 or >95 mph, etc.) using
@@ -134,9 +138,15 @@ Note `bat_speed`'s low trait share (0.126): included per decision, but expect it
 
 **Clustering:**
 - `sklearn.mixture.GaussianMixture`, full covariance, per batter.
-- **Model selection per hitter via BIC** over k=1..~8, with a floor on cluster occupancy
-  (drop components holding <~5% of a hitter's swings or <N_min swings). The selected *k* is
-  itself a headline output — it *is* the "repertoire size."
+- **Model selection per hitter via BIC** over k=1..k_max, then a **post-BIC merge** of
+  near-duplicate components. BIC over-segments at large n (its ln(n) penalty is too weak to stop
+  it splitting trivial density bumps into large-but-near-identical components — e.g. Ohtani's twin
+  "Level Center" swings at 75 vs 78 mph, each ~28% usage). We merge component pairs closer than
+  `MERGE_SEP=2.0` within-cluster-SD Mahalanobis (closest pair first, iteratively) so each surviving
+  cluster is a genuinely distinct shape. This is *separation*-based, deliberately **not** an
+  occupancy floor — the phantom components are large, so a size floor cannot catch them. (ICL was
+  ruled out: its entropy penalty overcorrects and collapses ~everyone to k=1, because swing shapes
+  are a continuum.) The post-merge *k* is the headline "repertoire size" (mean ≈1.9, median 2).
 - **Minimum threshold:** cluster only units with ≥150 tracked swings (2024–26 pooled) *per
   `(batter, stand)`*. Lowered from the original ≥300 pooled-per-batter rule so a switch hitter's
   weaker side still qualifies (e.g. Abraham Toro R = 282 swings); the identifiability cap

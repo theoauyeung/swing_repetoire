@@ -1,5 +1,322 @@
 # Worklog
 
+## swing+_results.ipynb — archetype column on the cluster leaderboards (2026-07-09)
+
+- Added an **Archetype** column (Layer-1 label from `shape_archetypes.parquet`) to the per-shape
+  Swing+ leaderboard and the `cluster_table(name)` helper, merged on
+  (batter_id, batter_stand, cluster). A bare "cluster 2" now reads as e.g. "Uppercut Pull". Markdown
+  note updated. Re-executed clean on the post-merge clusters (numbers shifted from the old committed
+  outputs because cluster.py was re-run with the over-split merge). Illustrative: Cal Raleigh (L)'s
+  two Uppercut Pull shapes split 55.2 (best) vs 40.3 (worst) Swing+ — same archetype, A-swing vs
+  fooled version.
+
+## cards.py — cluster 0 archetype label = "Primary" (2026-07-09)
+
+- Per user: `archetype_detailed` is now `"Primary"` for cluster 0 (the highest-usage swing) instead
+  of archetype+situation, so the swing+ leaderboard / `cluster_table` read "Primary" on the primary
+  row. `archetype_name` still holds the true archetype (analysis unaffected). The card renderers
+  (`shape_cards_catalog.md`, notebook `shape_card`) show the primary's real archetype_name in the
+  header since the role star already says PRIMARY (avoids a redundant "PRIMARY — Primary").
+  Re-ran cards.py + both notebooks (clean); all 1,364 cluster-0 rows = "Primary".
+
+## Handedness fix + archetype situational enrichment (2026-07-09)
+
+- **BUG FOUND (user flagged pull/oppo correctness): the pull frame was wrong.** Validated every
+  metric against `bearing_angle` (established absolute convention via pull%>oppo%: RHH 59% to LF /
+  bearing<0, LHH 60% to RF / bearing>0; Paredes dead-pull RHH confirms). Two distinct problems:
+  - **`horz_attack_angle` is BATTER-RELATIVE** (raw + = toward opposite field for both hands;
+    corr(raw, pull) = -0.47 RHH / -0.45 LHH). So the pull frame is a **uniform negation**
+    (`-horz_attack_angle`), NOT a per-hand mirror. The old `*(L?-1:1)` left **RHH inverted** —
+    RHH "pull" was actually oppo; LHH was accidentally correct. (Visible symptom: Aaron Judge, a
+    pull hitter, was mislabeled "Uppercut Oppo" → now correctly "Uppercut Pull".)
+  - **`plate_x` is ABSOLUTE** (catcher frame; corr(raw, pull) = -0.15 RHH / +0.16 LHH) → needs a
+    REAL per-hand flip (flip RHH: `*(L?+1:-1)`). The old shared `side` mirror had it wrong for both.
+  - Fixes: `features.py` (horz → uniform negation), `xRV_model.build_features` + `cards.py`
+    (plate_x → flip RHH). **No xRV retrain needed** — feature sign is tree-invariant, so xrv_swings
+    is unchanged. Re-validated post-fix: corr(horz_attack_angle_pull, pull) = +0.47/+0.45 both hands.
+- **Lexicon → K_ARCH=3** (was 4). Correcting the pull frame collapsed the geometry onto a
+  **level-oppo ↔ uppercut-pull diagonal** (uppercut swings are pull-side), so BIC now prefers 3:
+  **Level Oppo / Level Center / Uppercut Pull** (578/478/308; HAA thresholds ±5). k≥4 splits the
+  level band into same-named near-duplicates. Assignment confidence median 0.85 (lower — the
+  corrected geometry is more of a continuum). The fail-loud name-collision assert caught the k=4
+  duplicate ("two Level Oppo") before it shipped.
+- **Archetype situational enrichment (user ask).** `cards.py` adds `context_tag` (top-3 over-indexed
+  buckets) and `archetype_detailed` = "archetype · situation" so same-archetype shapes separate:
+  e.g. Ohtani's two Uppercut Pulls → "· down, vs offspd" vs "· away, vs offspd"; Raleigh L's two →
+  "· down, vs offspd, 3-2" (grade 55) vs "· down, vs offspd, inside" (grade 40, -11.6 runs/100).
+  Shapes deployed identically still tie on the tag — then geometry (name_delta) + value (grade)
+  separate them. swing+_results.ipynb leaderboard + cluster_table now show `archetype_detailed`;
+  cluster_results.ipynb palette/map/scatter/markdown updated to the 3 archetypes + corrected frame.
+- Re-ran features → cluster → interpret → cards + both notebooks (all clean).
+
+## Interpretability Layer 2 — per-hitter swing ID cards (2026-07-09)
+
+- **Added `src/cards.py`** (consumes cluster_summary + shape_archetypes + cluster_assignments +
+  xrv_swings + swings_model). One row per (batter, stand, cluster) → `data/shape_cards.parquet`
+  (1,364 rows / 703 units) + `shape_cards_catalog.md`. Notebook renderer `shape_card(name)` added to
+  cluster_results.ipynb (renders each shape as a rich-Markdown card). Fields per shape:
+  - **name_delta** — geometry phrase; primary vs the league (cohort) mean, secondaries vs THIS
+    hitter's primary. Top features by |delta| in centroid-SD units (always emits ≥1 so it's never
+    blank). This is where same-archetype shapes separate — e.g. Ohtani's two "Uppercut Pull"
+    shapes read "+17deg uppercut/+26deg pull" (78 mph A-swing) vs "−8mph slower/+20deg pull" (67 mph
+    defensive version).
+  - **when_label** — contexts where the shape is over-indexed vs the hitter's own baseline
+    (lift = P(shape|ctx)/P(shape) − 1 ≥ +15%, ≥25 unit swings & ≥5 shape swings in the bucket),
+    across count / location(up/down/inside/away, pull-framed) / pitch(FB vs offspeed) / base-out.
+    Base-out is deployment-only.
+  - **grade** — mean xrv_grade over the shape's swings (Part C.1 conditional grade).
+  - **matched_runs100** — within-batter matched contrast vs the primary (Part C.2): mean xRV(shape) −
+    xRV(primary) over shared count3×height3×pitch2 strata (≥5 each), usage-weighted, ×100. NaN for
+    the primary. Base-out deliberately excluded (xRV excludes game state). + matched_n + matched_thin.
+- **Design decisions realized (from the brainstorm):** naming = delta-vs-own-primary; when = over-
+  index/lift; value = context-conditioned grade + matched contrast vs primary (cluster 0); context
+  dims count/location/pitch/base-out with base-out deployment-only. Matched strata kept coarse
+  (3×3×2) so two shapes share support; the when-label uses richer buckets (only needs marginal
+  support). Location pull-framed to match features.py (`plate_x_pull`, mirror + = pull).
+- **Sanity:** grade mean 49.3 / sd 2.5 (compressed → the matched contrast, range −12.1..+7.0
+  runs/100, carries the value discrimination). Only 6% of secondaries beat their primary in matched
+  spots (expected — cluster 0 is the highest-usage, usually-best swing); those 40 are the
+  situational-upgrade cases. 6% of contrasts flagged thin. Ohtani's 67 mph defensive Uppercut Pull
+  (used inside +168% / offspeed +78% / down +73%) grades 45 / −10.34 runs/100 — his worst shape,
+  exactly the fooled-emergency swing. Notebook re-executed clean.
+- **Next / open:** Layer 2 is the first cut of Facet-1 (Part C.1/C.2). A branded report export and
+  the Facet-2 diversity/adjustability stage remain. Grade compression suggests a future within-hitter
+  or percentile grade may read better than the league T-score for the card headline.
+
+## M2 fix — post-BIC component merge to kill over-splitting (2026-07-09)
+
+- **Problem (found via Layer-1 eyeballing):** pure minimum-BIC over-segments at large n. Diagnostic
+  (220-unit sample): mean closest-pair component separation falls 2.21→1.45 across n quartiles while
+  mean k rises 2.15→4.12 — BIC's ln(n) penalty is too weak to stop it splitting trivial density bumps
+  into large-but-near-duplicate components (Ohtani's twin Level Centers at 75 vs 78 mph, both ~28%
+  usage). 29% of multi-cluster units had a pair <1.5 Mahalanobis, 69% <2.0.
+- **Ruled out two fixes:** (1) occupancy floor — the phantoms are *large* (27-28%), not tiny, so a
+  size floor can't catch them; the problem is separation. (2) Switching BIC→ICL — overcorrects
+  catastrophically: k_icl collapsed to ~1 for 198/222 units (swing shapes are a continuum, so ICL's
+  entropy penalty refuses to split at all). Neither selection criterion works alone.
+- **Fix (user chose threshold 2.0):** keep BIC selection, then `merge_components()` collapses
+  component pairs closer than `MERGE_SEP=2.0` (within-cluster-SD Bhattacharyya-Mahalanobis, same
+  metric as `shape_dispersion` — factored a shared `_pair_maha` helper) into one shape, closest pair
+  first, iteratively. Un-merged singletons keep the GMM's PD params; merged groups get empirical
+  mean/cov/weight from pooled swings; merged responsibility = sum of member comps'. Reported k is
+  post-merge; `bic` is still the selected model's. `cluster.py` docstring + constants updated.
+- **Result:** cohort unchanged (703 units). k: mean 3.15→**1.94**, median 3→2, max 7→5. k dist:
+  168 k=1 / 428 k=2 / 91 k=3 / 13 k=4 / 3 k=5. Verified merges: Ohtani 5→3 (twins merged, the two
+  genuinely-different Uppercuts kept), Arraez 7→5, Carson Kelly 6→3, Merrill 4→2. shape_dispersion
+  mean 2.14→2.06 (now on empirical merged covs, not fitted — slight frame change).
+- **Two consequences, both resolved (user decisions):**
+  1. **Facet-2 impact — keep 2.0.** Mean k halved, 24% of units now k=1. User accepted: purity for
+     Facet-1 shape value takes priority; Facet 2 works with the compressed spread. (Revisit at the
+     diversity stage if the signal is too thin — dialing to ~1.8 would recover shapes without
+     un-merging the flagged twins.)
+  2. **Lexicon → K_ARCH=4** (BIC min on the merged pool; k=5 forced a degenerate 25-shape bin).
+     Retuned the naming thresholds since the merged pool is center-heavy: VAA_FLAT 6→3 (~6° reads
+     "Level", not "Flat"), HAA_OPPO/PULL ±6→±4 (so the two center archetypes split by direction
+     instead of colliding on "Center"). Clean 2x2 vocabulary: **Level Oppo / Level Pull / Uppercut
+     Oppo / Uppercut Pull** (528/363/254/219 shapes, confidence median 0.96). interpret.py +
+     cluster_results.ipynb (ARCH_PAL/ARCH_ORDER + the 3 lexicon visuals) updated to 4 archetypes;
+     notebook re-executed clean on the merged data.
+
+## Interpretability Layer 1 — league swing-shape archetype lexicon (2026-07-09)
+
+- **Goal (user brainstorm):** clusters are bare indices ("Ohtani Cluster 1") and require
+  cross-referencing three disconnected views (swing_cards mechanics, usage_heatmap deployment,
+  xrv_swings value) to interpret. Agreed a two-layer fix: **Layer 1** = a cross-unit archetype
+  vocabulary so every cluster inherits a human name; **Layer 2** (next) = per-hitter "swing ID
+  cards" that name each shape as a delta-vs-primary, summarize *when* it's used (over-index/lift
+  vs the hitter's own baseline), and grade value context-conditioned + within-batter matched vs
+  the primary (Part C.2). This entry covers Layer 1 only.
+- **Added `src/interpret.py`.** Recomputes each of the 1,954 unit-cluster centroids in the
+  **pull frame** (handedness-mirrored horz_attack_angle, from cluster_assignments + swings_model —
+  cluster_summary stores the raw unmirrored angle which would split L/R pull swings), league-
+  standardizes the centroid pool (unweighted: one obs per shape), fits a full-cov GMM, and tags
+  every unit-cluster with an archetype + assignment confidence. Algorithmic naming from the
+  centroid — vertical (Flat <6° VAA <13° Level < Uppercut) x direction (Oppo <−6° HAA_pull <6°
+  Center < Pull) — reproducible regardless of GMM component order; asserts names come out unique
+  (fail-loud). Outputs (gitignored): `shape_archetypes.parquet` (per unit-cluster tag),
+  `archetype_lexicon.parquet` (5-row lexicon), `archetype_lexicon.md`.
+- **Decision — archetypes defined on 4 GEOMETRY features; bat_speed is a descriptor, not a
+  defining axis.** Including bat_speed (all 5 shape features) let the min-BIC 5-way carve key on
+  effort: it split off a degenerate 134-shape low-bat-speed "weak contact" bin (Arraez/Kwan/soft-
+  Ohtani) and dissolved the geometry grid. Motivated by research-design's own finding (bat_speed
+  ICC 0.126, "state not trait"); mirrors how intercept_y is quarantined as a descriptor. Geometry-
+  only recovers a balanced, stable grid (Flat Oppo 518 / Flat Pull 463 / Uppercut Oppo 349 /
+  Level Center 343 / Uppercut Pull 281) and reports bat_speed as a per-archetype correlate
+  (flat ~68.7, lifted ~71.3). The per-batter clustering in cluster.py is UNCHANGED (still 5 feats);
+  this is a naming overlay only. (User confirmed geometry-only.)
+- **k=5 chosen** (k=4 is marginally lower BIC but merges two grid cells; k≥6 splits degenerate
+  near-duplicates). Exemplars pass scouting priors: Schwarber/Pasquantino→Uppercut Pull,
+  Soto/Kwan→Flat Oppo, Semien/Arenado→Flat Pull, Altuve/Julio→Uppercut Oppo,
+  Swanson/Judge→Level Center.
+- **Stability:** N_INIT=8 sometimes settled in a worse local optimum → **N_INIT=25** reliably hits
+  the global one. The 5 archetype *names* are seed-invariant; only a few boundary shapes move
+  (Hungarian-matched seed agreement ~0.93). Assignment confidence median 0.94, 62% >0.8 (lower
+  on genuine boundary shapes, e.g. Judge's primary 0.69 — stored so Layer 2 can flag borderline).
+- **Known, expected wrinkle:** ~21% of unit-archetype pairs (328/1564) carry >1 cluster of the
+  same archetype — effort/fine-geometry variants (e.g. Ohtani's two Uppercut Pull at 78 vs 67 mph).
+  The archetype tag intentionally groups them; the Layer-2 delta-vs-primary text carries the
+  distinguishing bat_speed/geometry gap. Nothing lost, just moved to the right layer.
+
+## Interpretability Layer 1 — lexicon eyeball visuals in cluster_results.ipynb (2026-07-09)
+
+- Appended an "Archetype lexicon (Layer 1)" section to `src/cluster_results.ipynb` (Savant dark-navy
+  theme, matching swing_cards/usage_heatmap). Loads `shape_archetypes` + `archetype_lexicon`; adds
+  `ARCH_PAL`/`ARCH_ORDER` (palette ordered by lift: cool=flat, warm=uppercut). Three visuals:
+  1. **bat_speed vs vert_attack_angle** scatter over all 1,954 shape centroids, colored by archetype,
+     with OLS fit + Pearson **r = 0.36** (+~0.2 mph/degree). Confirms effort rises with uppercut, i.e.
+     bat_speed is partly redundant with lift — the empirical basis for making it a descriptor, not a
+     defining axis.
+  2. **`archetype_map(name)`** — a hitter's shapes on the league direction×vertical grid (bubble = usage
+     weight, annotation = cluster id · bat speed, dotted naming-threshold lines). The tool for the
+     distinguishability question: are a hitter's shapes spread out or piled in one archetype cell?
+  3. **collision curve** — mean DISTINCT archetypes vs repertoire size k, vs the y=x "if every shape were
+     unique" line, annotated with % of units at each k that repeat a label.
+- **Distinguishability finding (answers the k=7 worry):** archetype labels saturate at ~2.8-3.0 distinct
+  no matter how high k climbs (k=3 → 52% of units repeat a label; k=4 → 91%; k>=5 → 100%; 40% overall).
+  A 5-word vocabulary provably can't uniquely name 7 shapes — expected, and the reason Layer 2
+  (delta-vs-primary + bat_speed) is required. BUT most same-label shapes still separate on position/effort
+  (e.g. Arraez's 3 Flat Oppos fan out along VAA/direction).
+- **Side finding — probable GMM over-split (NOT a lexicon issue):** a few hitters carry two clusters that
+  overlap on *both* geometry and bat_speed (Ohtani c0/c1 Level Center 75 vs 78 mph; Arraez c1/c6 Level
+  Center). Layer 2 would name these near-identically → they may be phantom shapes the per-batter GMM
+  should have merged. Ties to the open "cluster stability check" TODO in research-design.md; worth
+  resolving before Layer 2 so we don't name non-shapes. Verified the whole notebook executes clean
+  (nbconvert --execute, exit 0; all three new cells emit figures).
+
+## M3 — xRV 0-100 grade + feature-set regression note (2026-07-08)
+
+- Added `xrv_grade` to `data/xrv_swings.parquet`: z-score the expected `xrv` across all swings, map to
+  50 + 10*z, clip [0,100] (T-score style; 50 = league-avg swing). Computed in `main()` before the
+  parquet save. Verified: mean 50.00, sd 9.99, ~0.06% clipped low / 0.003% high.
+- **Feature-set change (user): dropped plate location (`plate_x_pull`, `plate_z_norm`) and replaced
+  `stand_L`+`p_throws_L` with a single `same_hand` platoon flag.** FEATURES now = balls, strikes,
+  same_hand, pitch_type + 5 shape. Fixed a build_features bug (same_hand was computed to a local, not
+  assigned). **Regression:** 2026 held-out p_bip AUC 0.788→0.732, p_foul 0.828→0.760, v_bip r2
+  0.050→0.037 — plate location is a top contact/BIP driver; removing it costs ~0.06-0.07 AUC. PARAMS
+  are also still tuned on the old feature set. Validation gate unchanged (0.957; tables-only).
+  Recommendation pending user: add plate location back, then re-run the sweep to re-tune PARAMS.
+- **Decision (user): plate location added back.** FEATURES now = balls, strikes, same_hand,
+  plate_x_pull, plate_z_norm, pitch_type + 5 shape (11 total; kept `same_hand` over stand_L/p_throws_L).
+  Rationale re: the leakage worry — plate location is NOT leakage: it is pre-swing, exogenous (pitcher-
+  chosen), and absent from the count+outcome target. It is a *confounder* (common cause of both swing
+  shape and outcome, design Limitation #2), so conditioning on it *reduces* shape-outcome confounding
+  and de-confounds the at-contact angular features — the opposite of a leak. Only caveat is
+  interpretational (location & the at-contact angles are collinear, so don't read a shape-vs-location
+  credit split off feature importances; the causal shape question lives in Part C.2). Re-running the
+  sweep fresh (old 90 runs were on the old feature set) to re-tune PARAMS for this feature set.
+- **Resolved.** Re-ran the sweep (90 runs) on the 11-feature set; applied gap-aware picks to PARAMS
+  (p_bip d4/lr.08/mcw20/ss.6/cs.8/λ1/α5/γ.5/1336t; p_foul d5/lr.05/mcw50/ss.7/cs.9/λ0/α5/γ0/1413t;
+  v_bip d3/lr.1/mcw1/ss.9/cs.9/λ1/α1/γ1/412t). 2026 held-out recovered: p_bip AUC 0.786, p_foul 0.827,
+  v_bip r2 0.048; validation gate corr 0.957. Matches the original design feature set — `same_hand`
+  vs stand_L/p_throws_L was immaterial; plate location was the whole ~0.06 AUC. `xrv_grade` mean 50,
+  sd 10, range 2-100.
+
+## M3 — xRV script consolidation + autoresearch hparam sweep (2026-07-08)
+
+- **Autoresearch sweep** (`experiments/bench.py` + `experiments/sweep.py`, branch
+  `autoresearch/xrv-hparams-20260708`): random-searches XGBoost hyperparameters for each xRV
+  sub-model. **Anti-overfit split: train 2024, select on 2025 val (season transfer), 2026 never
+  loaded** during the sweep; every run logs the train-val gap; search space weighted to regularization;
+  ties broken toward the simpler config. Resumable (skips logged configs, recovers best from
+  `autoresearch.jsonl`) so kills only cost the in-flight config.
+- **Consolidated `src/xRV_model.py`** (user: too many functions). Removed the in-script tuning/CV
+  machinery (`tune_and_fit`, `cv_score`, `make_model`, `sample_configs`, `_py`) — the sweep owns
+  hyperparameter search now. Hyperparameters are a single fixed `PARAMS` dict (VAL-selected;
+  p_bip = sweep winner, p_foul/v_bip provisional baselines pending the running sweep). 11 functions →
+  7; `main()` is now a linear train-3-models → assemble → validate → report flow with no early
+  stopping (fixed `n_estimators` per model). Behavior otherwise unchanged (same features, run-value
+  tables, `lw_raw` baseline). `bench.py` still imports `FEATURES`/`build_features`/`load_run_value_tables`/
+  `bip_value_target` from it.
+- **Sweep done (90 runs, 30/model). Headline: tree-hyperparameter tuning is near-worthless here** —
+  best-vs-baseline VAL improvement was only −0.16% (p_bip), −0.22% (p_foul), −0.08% (v_bip), all
+  noise-level, and the raw-val winners carried the *worst* train-val gaps. So I selected **gap-aware**:
+  among configs within 0.0015 val of the best, the smallest-gap (shallow, regularized) one.
+  Picks now in `PARAMS`: p_bip d4/lr.08/mcw20/ss.6/cs.8/λ1/α5/γ.5/1654t (gap 0.018 vs 0.038);
+  p_foul d5/lr.03/mcw20/ss.7/cs.6/λ5/α1/γ.1/2056t; v_bip d3/lr.05/mcw5/ss.7/cs.8/λ1/α.5/γ1/993t
+  (gap 0.005 vs 0.010).
+- **2026 held-out confirmation** (consolidated script): p_bip logloss 0.5292 / AUC 0.788; p_foul
+  0.4761 / 0.828; v_bip rmse 0.4590 / r2 0.050; realized_rv vs delta_run_exp **corr 0.957**. These
+  match the earlier raw-search run to ~3 decimals, so the more-regularized picks generalize to 2026
+  just as well — the anti-overfit selection cost nothing on the real holdout.
+- **Autoresearch conclusion:** the tree-hyperparameter search path is exhausted (flat landscape); more
+  random search on the same space is wasteful. Higher-leverage next paths (not run): feature
+  engineering, and the v_bip weak-signal question (r2~0.05 is a ceiling for a mediator-free BIP-value
+  model, not a tuning problem).
+
+## M3 — xRV run-value baseline fix: use lw_raw (out in play is negative) (2026-07-08)
+
+- **Bug (baseline):** the run-value layer used `linear_weights.lw` (the OUT-centered column, where
+  `out_in_play = 0`) as the Model-3 target, then rebased with `mu` = freq-wtd mean lw (0.2477) to
+  reach the ERV frame. That made the BIP target semantically wrong — an out in play read as 0 rather
+  than a real ~ -0.25-run cost. `linear_weights.csv` carries both columns: `lw` (out-centered) and
+  `lw_raw` (avg-PA-centered, mean event ~ 0, `out_in_play = -0.2476`). ERV from `count_values` is also
+  avg-PA-centered (ERV(0,0) ~ 0), so **`lw_raw` is the column that shares ERV's frame.**
+- **Fix:** switched the target and all run-value math to `lw_raw` and **dropped `mu` entirely**
+  (mu_raw ~ 0.0001, so it was a no-op once on the right column). Now: BIP contribution = `lw_raw - ERV(b,s)`;
+  2-strike whiff (K) = `lw_raw[K] - ERV(b,2)`; Model-3 target = `lw_raw(outcome)` (out_in_play = -0.248,
+  negative). `load_run_value_tables` no longer returns `mu`; docstring/report updated.
+- **No change to final xRV.** `lw = lw_raw + 0.2476` (a constant shift across all outcomes), and the
+  old assembly subtracted that same constant as `mu`, so the assembled `xrv` and `v_bip` RMSE/R² are
+  numerically identical — this is a correctness/clarity fix of the target scale, not an output change.
+  Smoke check: BIP target min -0.248 (out rows negative), realized_rv vs delta_run_exp corr 0.959.
+
+## M3 — xRV features: + pitcher handedness, − game state (leakage exploration) (2026-07-08)
+
+- **Added pitcher handedness.** `pitcher_throws` (R/L) was in `pbp_raw` but not either extract. Added
+  `r.pitcher_throws` to `extract.py`'s QUERY and `"pitcher_throws"` to `features.py` KEEP (source of
+  truth for future runs), and **backfilled** both cached parquets from a one-off `pbp_raw` pull
+  (play_id→pitcher_throws, 0 nulls: swings_2024_2026 759,083 R / 283,208 L; swings_model 579,006 R /
+  216,717 L) so no slow full re-extract was needed. `xRV_model.build_features` now derives
+  `p_throws_L`; kept alongside `stand_L` so the trees learn the platoon interaction. It draws ~3-5%
+  in-sample gain across the three models.
+- **Dropped game state (outs + base-out flags) after an empirical leakage check.** User flagged a
+  leakage concern. Compared full vs lean feature sets on held-out 2026 (fixed representative configs,
+  batter-grouped early stop):
+  | model | lean (no game state) | full (+ game state) | game-state in-sample gain |
+  |---|---|---|---|
+  | p_bip  | logloss 0.5313 / AUC 0.7858 | 0.5309 / 0.7861 | 10.7% |
+  | p_foul | logloss 0.4763 / AUC 0.8286 | 0.4768 / 0.8284 (worse) | 8.0% |
+  | v_bip  | rmse 0.4579 / R² 0.0551 | 0.4578 / 0.0556 | 13.6% |
+  Game state takes 8-14% of in-sample split gain but gives ~0 held-out lift (slightly hurts p_foul) —
+  the signature of fitting situation-correlated noise, not swing signal. **Precise framing:** it is
+  NOT target leakage (base-out is pre-pitch and absent from the count+outcome run-value target, so it
+  can't and doesn't inflate held-out metrics). The real issues are (1) interpretational confounding —
+  base-out isn't a property of the swing, so conditioning on it lets the Part C.1 per-cluster grade
+  absorb *deployment* rather than shape quality, against the design's "net of situational leverage"
+  estimand; (2) mild overfit. Set `USE_GAME_STATE = False` (kept as a toggleable `GAME_STATE` group +
+  build_features still computes the base flags, so flipping back is one line). Re-ran the full pipeline.
+
+## M3 — bespoke xRV: swing-outcome decomposition (structure) (2026-07-08)
+
+- Added `src/xRV_model.py`. Per-swing expected run value via a 3-model swing-outcome tree the user
+  specified, all conditioned on the SAME pre-swing predictors — pitch/situation **context + the 5
+  swing-shape features** (user chose shape-aware, a deliberate departure from Part B's mediator-free
+  baseline) — and **no post-contact mediators** (exit velo / launch angle excluded, incl. from the
+  xwOBACON piece per user):
+  - `p_bip` — XGBClassifier, P(ball in play | swing). Population: all competitive swings.
+  - `p_foul` — XGBClassifier, P(foul | swing, ¬BIP); whiff = 1−p_foul. Population: ¬BIP subset
+    (target = `is_contact`, which on a non-BIP swing == foul). Whiffs 185,743 / fouls 311,784.
+  - `v_bip` — XGBRegressor, E[linear-weight run value of the batted ball] ("xwOBACON"). Population:
+    BIP (298,196). Target = `lw` of `pa_outcome` (hits→own weight, all other BIP→out_in_play=0).
+- **Run-value layer built from the three CSVs** (RE24-style: value of resulting state − ERV of the
+  count left). `count_values`→ERV(b,s); `linear_weights`→outcome `lw` (out-centered) + `mu` =
+  freq-weighted mean lw (rebases lw onto the ERV frame, lw'=lw−mu); `count_transitions` loaded as a
+  marginal-rate reference. Whiff/<2-strike-foul = ERV(b,s+1)−ERV(b,s); 2-strike whiff = (lw_K−mu)−ERV(b,2);
+  2-strike foul = 0. Assembly:
+  `xRV = P(BIP)·((V_bip−mu)−ERV) + (1−P(BIP))·[P(foul)·rv_foul + (1−P(foul))·rv_whiff]`.
+- **Tuning:** randomized search (N_SEARCH=8) over depth/lr/subsample/colsample/min_child_weight/lambda,
+  **GroupKFold by `batter_id`** (no hitter split across folds), XGBoost early stopping on each fold;
+  search runs on a 250k subsample for speed, best config refit on full train at the CV-chosen
+  iteration count. **2026 held out** as the final test season (train/tune 2024-25).
+- **Validation gate (design requirement):** `validate_run_value_tables()` checks the tables' *realized*
+  run value against `delta_run_exp`. Smoke test (30k slice) → **corr 0.957**, so the CSV-derived tables
+  reproduce the ground-truth per-pitch RE change. Aggregate hitter xRV vs `pitch_values.ipv` still TODO.
+- Outputs (gitignored): `data/xrv_models/{p_bip,p_foul,v_bip}.json` + `reports.json`,
+  `data/xrv_swings.parquet` (play_id, model probs, xrv, realized_rv), `data/xrv_report.md`.
+- Installed `xgboost==3.3.0` into the shared `driveline` venv (was lightgbm-only). API notes for this
+  env: sklearn 1.9 dropped `mean_squared_error(squared=False)` → use `root_mean_squared_error`;
+  XGBoost 3.3 takes `early_stopping_rounds` as a **constructor** kwarg (not a fit arg).
+
 ## M2 viz — swing-card attack direction: true field orientation (2026-07-08)
 
 - The ATTACK DIRECTION panel (`_p_dir` in `cluster_results.ipynb`) drew from `horz_attack_angle_pull`

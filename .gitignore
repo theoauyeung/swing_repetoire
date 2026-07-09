@@ -138,3 +138,11 @@ dmypy.json
 
 # Project data extracts — never commit (contains player data)
 data/
+# autoresearch — experiment scripts + volatile state (not part of the deliverable)
+experiments/
+autoresearch.md
+autoresearch.jsonl
+autoresearch-dashboard.md
+experiments/best_params.*.json
+/tmp/autoresearch-*.txt
+.autoresearch-off

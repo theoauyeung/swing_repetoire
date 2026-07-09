@@ -10,8 +10,11 @@ which is exactly why an unsplit switch hitter separates on stance.
 For each qualifying unit (>= MIN_SWINGS competitive tracked swings, 2024-26 pooled):
   - z-score the 5 shape features within that hitter,
   - fit full-covariance GMMs for increasing k and select k by minimum BIC (early-stopping
-    once BIC stops improving). 
-  - assign every swing to its most-likely component (with a responsibility/confidence),
+    once BIC stops improving),
+  - merge component pairs closer than MERGE_SEP into one shape (BIC over-segments at large n
+    into large-but-near-duplicate components; the merge collapses those back so each cluster is
+    a genuinely distinct shape). Reported k is the post-merge count.
+  - assign every swing to its most-likely (merged) component with a responsibility/confidence,
   - cluster 0 = the hitter's primary swing,
   - score how distinct the shapes are via shape_dispersion (usage-weighted mean pairwise
     Mahalanobis distance between cluster centroids, each pair measured against its own
@@ -48,6 +51,11 @@ PARAMS_PER_COMP = D + D * (D + 1) // 2   # free params of a full-cov Gaussian in
 PATIENCE = 3          # stop searching k once BIC fails to improve this many times in a row
 N_INIT = 5            # EM restarts per k (stabilizes the BIC estimate we now rely on)
 SEED = 7
+MERGE_SEP = 2.0       # post-BIC merge: collapse component pairs closer than this (within-cluster-SD
+                      # Mahalanobis) into one shape. BIC over-segments at large n (its ln(n) penalty
+                      # is too weak to stop it splitting trivial density bumps), producing large but
+                      # near-duplicate components; 2.0 (~16% overlap) enforces genuinely distinct
+                      # shapes. Separation-based, NOT an occupancy floor — the phantoms are big.
 
 
 def fit_batter(X_raw):
@@ -72,18 +80,66 @@ def fit_batter(X_raw):
             if since >= PATIENCE:
                 break
 
-    gm, k = best_gm, best_k
-    resp = gm.predict_proba(X)
-    labels = resp.argmax(axis=1)
-    resp_max = resp.max(axis=1)
-    disp = shape_dispersion(gm.means_, gm.covariances_, gm.weights_)
+    # BIC over-splits at large n, so merge near-duplicate components before finalizing. k is the
+    # POST-merge shape count (the reported repertoire size); best_bic is the selected model's BIC.
+    resp = best_gm.predict_proba(X)
+    labels, resp_max, means, covs, weights = merge_components(
+        X, resp, best_gm.means_, best_gm.covariances_, MERGE_SEP)
+    k = len(weights)
+    disp = shape_dispersion(means, covs, weights)
 
     # relabel by descending usage weight -> cluster 0 = primary swing
-    order = np.argsort(-gm.weights_)
+    order = np.argsort(-weights)
     remap = np.empty(k, dtype=int)
     remap[order] = np.arange(k)
     labels = remap[labels]
     return labels, resp_max, mu, sd, k, best_bic, disp
+
+
+def _pair_maha(mi, Si, mj, Sj):
+    """Bhattacharyya-style Mahalanobis distance between two components, measured against their
+    pooled within-cluster covariance (separation in units of the components' own scatter)."""
+    d = mi - mj
+    return float(np.sqrt(d @ np.linalg.solve(0.5 * (Si + Sj), d)))
+
+
+def merge_components(X, resp, means0, covs0, thresh):
+    """Collapse component pairs closer than `thresh` into one shape, closest pair first, until all
+    surviving pairs clear the bar (or one remains). Un-merged singletons keep the GMM's fitted
+    (regularized) params; a merged group's params are recomputed empirically from its pooled swings.
+    Merged responsibility = sum of member components' responsibilities. Returns
+    labels, resp_max, means, covs, weights in X's (z-scored) frame."""
+    comp = resp.argmax(axis=1)                         # original hard component per swing
+    member = {g: [g] for g in range(len(means0))}      # surviving group -> original component ids
+    reg = 1e-5 * np.eye(X.shape[1])
+
+    def gstats(g):
+        ms = member[g]
+        if len(ms) == 1:
+            return means0[ms[0]], covs0[ms[0]]         # GMM's own PD params (robust for small comps)
+        pts = X[np.isin(comp, ms)]
+        return pts.mean(0), np.cov(pts.T) + reg
+
+    while len(member) > 1:
+        stats = {g: gstats(g) for g in member}
+        gs = list(member)
+        dist, a, b = min((( _pair_maha(*stats[x], *stats[y]), x, y)
+                          for i, x in enumerate(gs) for y in gs[i + 1:]), key=lambda t: t[0])
+        if dist >= thresh:
+            break
+        member[a] += member.pop(b)                     # absorb b into a
+
+    fg = {c: i for i, g in enumerate(member) for c in member[g]}   # original comp -> final label
+    labels = np.array([fg[c] for c in comp])
+    kf = len(member)
+    merged_resp = np.zeros((len(X), kf))
+    for c in range(len(means0)):
+        merged_resp[:, fg[c]] += resp[:, c]
+    resp_max = merged_resp[np.arange(len(X)), labels].round(3)
+    means = np.vstack([X[labels == i].mean(0) for i in range(kf)])
+    covs = np.stack([np.cov(X[labels == i].T) + reg for i in range(kf)])
+    weights = np.array([(labels == i).mean() for i in range(kf)])
+    return labels, resp_max, means, covs, weights
 
 
 def shape_dispersion(means, covs, weights):
@@ -96,9 +152,7 @@ def shape_dispersion(means, covs, weights):
     num = den = 0.0
     for i in range(k):
         for j in range(i + 1, k):
-            d = means[i] - means[j]
-            S = 0.5 * (covs[i] + covs[j])
-            dist = float(np.sqrt(d @ np.linalg.solve(S, d)))
+            dist = _pair_maha(means[i], covs[i], means[j], covs[j])
             wpair = weights[i] * weights[j]
             num += wpair * dist
             den += wpair

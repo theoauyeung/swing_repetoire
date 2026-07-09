@@ -47,11 +47,34 @@ Run pipeline stages from repo root with the `driveline` env active (each reads/w
 python src/extract.py     # mlb_db -> swings_2024_2026_mlb.parquet + profile.md (slow: full DB pull)
 python src/features.py    # competitive-swing filter -> swings_model.parquet
 python src/cluster.py     # per-batter GMM -> cluster_* + batter_repertoire + cluster_catalog.md
+python src/xRV_model.py   # bespoke per-swing xRV -> xrv_swings.parquet (+ xrv_grade)
+python src/interpret.py   # Layer-1 archetype lexicon -> shape_archetypes + archetype_lexicon.md
+python src/cards.py       # Layer-2 swing ID cards -> shape_cards.parquet + shape_cards_catalog.md
 ```
 
-**Pipeline order:** extract → features → cluster → (xrv → value_model → within_batter →
-diversity → reports, not yet built). Each stage is a standalone script with a `main()`; there is
+**Pipeline order:** extract → features → cluster → xrv (built). `interpret.py` (Layer 1 = cross-unit
+archetype lexicon) and `cards.py` (Layer 2 = per-hitter swing ID cards: name-delta-vs-primary,
+over-index when-label, grade + within-batter matched contrast) are the interpretability overlay and
+consume cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `value_model → within_batter →
+diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; there is
 no test suite or build step yet.
+
+**Archetype lexicon (`interpret.py`):** archetypes are defined on the **4 geometry features only**
+(tilt, length, VAA, HAA_pull); `bat_speed` is a reported descriptor, not a defining axis (its
+"state not trait" ICC drags a 5-feature carve into an effort bin). This is a naming overlay —
+`cluster.py` still defines shapes with all 5 features. 3 archetypes (BIC on the post-merge,
+handedness-corrected pool): **Level Oppo / Level Center / Uppercut Pull** — MLB geometry sits on a
+level-oppo ↔ uppercut-pull diagonal. `cards.py` (Layer 2) enriches each with a `context_tag`
+(top-3 over-indexed situations) → `archetype_detailed`, so same-archetype shapes read apart;
+cluster 0 (the primary swing) is labeled `"Primary"` in `archetype_detailed` (true archetype stays
+in `archetype_name`).
+
+**Handedness convention (validated vs `bearing_angle`; got this wrong once — see worklog 2026-07-09):**
+`horz_attack_angle` is **batter-relative** (raw + = opposite field for both hands), so the pull
+frame is a **uniform negation**: `horz_attack_angle_pull = -horz_attack_angle` (+ = pull, both
+hands). NO per-hand mirror. `plate_x` is **absolute** (catcher frame), so pull-side/inside needs a
+**real per-hand flip**: `plate_x * (L? +1 : -1)`. Don't apply the same mirror to both — they differ.
+`vert_attack_angle`, tilt, length, bat_speed are handedness-neutral.
 
 DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` via the
 `get_secret` helper in `extract.py`. Read-only user, database `mlb_db`. Full schema:
@@ -80,9 +103,13 @@ DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` 
 - **Clusters are strictly per-unit and NOT comparable across units.** Cluster 0 = that unit's
   primary (highest-usage) swing. All cross-unit analysis must use unit-level scalars
   (`batter_repertoire.parquet`), never shared cluster IDs.
-- **GMM k selection is pure minimum-BIC** (early-stop, no arbitrary occupancy floors); the only
-  bound is the identifiability cap `k_max = n // 20`. Cohort = ≥150 competitive swings **per
-  `(batter, stand)` unit** (lowered from pooled-300 to keep switch hitters' weaker side).
+- **GMM k selection is minimum-BIC (early-stop, no occupancy floors) followed by a post-BIC
+  merge:** BIC over-segments at large n into large-but-near-duplicate components, so `cluster.py`
+  merges component pairs closer than `MERGE_SEP=2.0` (within-cluster-SD Mahalanobis) into one
+  shape. Reported `k` is post-merge. NOT an occupancy floor — the phantom components are large
+  (~28% usage), the problem is separation. Identifiability cap `k_max = n // 20`. Cohort = ≥150
+  competitive swings **per `(batter, stand)` unit** (lowered from pooled-300 to keep switch
+  hitters' weaker side). Post-merge: mean k ≈1.9, median 2, max 5.
 - **Known confound:** count-based diversity metrics (`k`, `effective_shapes`) correlate with
   `n_swings` (r≈0.71) — must be sample-size-controlled before Facet 2. `shape_dispersion` is
   exempt (confirmed ~orthogonal to `n_swings`).

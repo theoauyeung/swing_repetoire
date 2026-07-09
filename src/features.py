@@ -5,12 +5,13 @@ Competitive swing (operational definition, no DB flag exists):
   - not a bunt (is_bunt == 0)
   - bat_speed >= 50 mph  (removes checked/emergency/defensive swings)
 
-Also mirrors horizontal attack angle by handedness so L/R hitters share a frame
-(+ = pull side). It is a per-(batter, stand) constant — clustering keys on
-(batter_id, batter_stand), so within a clustered unit the sign is fixed and the mirror does
-not affect within-unit clustering, while keeping the later cross-batter reference map
-consistent. (For a switch hitter the sign flips between their L and R units, which is why the
-two stances must be clustered separately — see cluster.py.)
+Also builds `horz_attack_angle_pull` (+ = pull side, both hands). horz_attack_angle is already a
+BATTER-RELATIVE metric — raw + = toward the OPPOSITE field for both L and R (verified against
+bearing_angle: corr(raw horz, pull) = -0.47 RHH / -0.45 LHH, i.e. pull = negative raw for both),
+so the pull frame is a uniform negation, NOT a per-hand mirror. (The old `*(L?-1:1)` mirror left
+RHH inverted — RHH "pull" was actually oppo — and only LHH came out right; see worklog 2026-07-09.)
+Note plate_x, by contrast, IS absolute (catcher frame) and needs a real per-hand flip — that lives
+in xRV_model.build_features / cards.py, not here.
 
 Input:  data/swings_2024_2026_mlb.parquet
 Output: data/swings_model.parquet  (competitive tracked swings, features + context + value)
@@ -31,7 +32,7 @@ VERT_BOUNDS = (-45.0, 75.0)  # vert_attack_angle physical bounds for a competiti
 
 KEEP = [
     "play_id", "game_pk", "game_date", "game_year",
-    "batter_id", "batter_full_name", "batter_stand", "pitcher_id",
+    "batter_id", "batter_full_name", "batter_stand", "pitcher_id", "pitcher_throws",
     "balls", "strikes", "outs_when_up", "plate_x", "plate_z", "plate_zone", "pitch_type",
     "on_1b_id", "on_2b_id", "on_3b_id",
     "delta_run_exp", "woba", "xwoba", "exit_velo", "launch_angle", "bearing_angle",
@@ -61,8 +62,9 @@ def main():
     print(f"  - bat_speed >= {BAT_SPEED_MIN:g}         : {len(d3):>10,}  (-{len(d2)-len(d3):,})")
     print(f"  - angle artifacts dropped  : {len(d4):>10,}  (-{len(d3)-len(d4):,})")
 
-    # handedness-mirrored horizontal attack angle (+ = pull side)
-    d4["horz_attack_angle_pull"] = d4["horz_attack_angle"] * np.where(d4["batter_stand"] == "L", -1.0, 1.0)
+    # pull frame (+ = pull side, both hands). horz_attack_angle is batter-relative with raw + = oppo,
+    # so pull is a uniform negation (validated vs bearing_angle) — NOT a per-hand mirror.
+    d4["horz_attack_angle_pull"] = -d4["horz_attack_angle"]
     out = d4[KEEP + ["horz_attack_angle_pull"]]
     dest = DATA / "swings_model.parquet"
     out.to_parquet(dest, index=False)
