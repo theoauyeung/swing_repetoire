@@ -58,8 +58,4 @@ source ~/.venvs/driveline/Scripts/activate   # Git Bash; Windows: ~/.venvs/drive
 python src/extract.py
 ```
 
-## ⚠️ IMPORTANT ⚠️
-Repo conventions (from the Driveline project template):
-- Use `snake_case` for variable names; store constants in `UPPER_CASE` near the top of the file.
-- Store secrets/credentials in `.env` (or `~/.claude/.env` for this project); never in a `.py` file.
-- Store machine-specific configuration in `.config`.
+
