@@ -15,18 +15,13 @@ For each qualifying unit (>= MIN_SWINGS competitive tracked swings, 2024-26 pool
     into large-but-near-duplicate components; the merge collapses those back so each cluster is
     a genuinely distinct shape). Reported k is the post-merge count.
   - assign every swing to its most-likely (merged) component with a responsibility/confidence,
-  - cluster 0 = the hitter's primary swing,
-  - score how distinct the shapes are via shape_dispersion (usage-weighted mean pairwise
-    Mahalanobis distance between cluster centroids, each pair measured against its own
-    within-cluster covariance — separation in units of the batter's own swing scatter;
-    within-batter, not yet cross-batter comparable).
+  - cluster 0 = the hitter's primary swing.
 
 Input:  data/swings_model.parquet
 Outputs:
   data/cluster_assignments.parquet  one row per swing: play_id, batter_id, batter_stand, cluster, resp_max
   data/cluster_summary.parquet      one row per (batter, stand, cluster): weight, n, raw centroid
-  data/batter_repertoire.parquet    one row per (batter, stand): k, bic, usage entropy, effective shapes,
-                                    shape_dispersion (within-batter Mahalanobis separation of shapes)
+  data/batter_repertoire.parquet    one row per (batter, stand): k, bic, usage entropy, effective shapes
   data/cluster_catalog.md           human-readable summary
 
 Run:  python src/cluster.py
@@ -60,7 +55,7 @@ MERGE_SEP = 2.0       # post-BIC merge: collapse component pairs closer than thi
 
 def fit_batter(X_raw):
     """Fit per-batter GMM, selecting k by minimum BIC.
-    Returns labels, resp_max, mu, sd, k, bic, shape_dispersion."""
+    Returns labels, resp_max, mu, sd, k, bic."""
     mu = X_raw.mean(axis=0)
     sd = X_raw.std(axis=0)
     sd[sd == 0] = 1.0
@@ -83,17 +78,16 @@ def fit_batter(X_raw):
     # BIC over-splits at large n, so merge near-duplicate components before finalizing. k is the
     # POST-merge shape count (the reported repertoire size); best_bic is the selected model's BIC.
     resp = best_gm.predict_proba(X)
-    labels, resp_max, means, covs, weights = merge_components(
+    labels, resp_max, weights = merge_components(
         X, resp, best_gm.means_, best_gm.covariances_, MERGE_SEP)
     k = len(weights)
-    disp = shape_dispersion(means, covs, weights)
 
     # relabel by descending usage weight -> cluster 0 = primary swing
     order = np.argsort(-weights)
     remap = np.empty(k, dtype=int)
     remap[order] = np.arange(k)
     labels = remap[labels]
-    return labels, resp_max, mu, sd, k, best_bic, disp
+    return labels, resp_max, mu, sd, k, best_bic
 
 
 def _pair_maha(mi, Si, mj, Sj):
@@ -108,7 +102,7 @@ def merge_components(X, resp, means0, covs0, thresh):
     surviving pairs clear the bar (or one remains). Un-merged singletons keep the GMM's fitted
     (regularized) params; a merged group's params are recomputed empirically from its pooled swings.
     Merged responsibility = sum of member components' responsibilities. Returns
-    labels, resp_max, means, covs, weights in X's (z-scored) frame."""
+    labels, resp_max, weights in X's (z-scored) frame."""
     comp = resp.argmax(axis=1)                         # original hard component per swing
     member = {g: [g] for g in range(len(means0))}      # surviving group -> original component ids
     reg = 1e-5 * np.eye(X.shape[1])
@@ -123,7 +117,7 @@ def merge_components(X, resp, means0, covs0, thresh):
     while len(member) > 1:
         stats = {g: gstats(g) for g in member}
         gs = list(member)
-        dist, a, b = min((( _pair_maha(*stats[x], *stats[y]), x, y)
+        dist, a, b = min(((_pair_maha(*stats[x], *stats[y]), x, y)
                           for i, x in enumerate(gs) for y in gs[i + 1:]), key=lambda t: t[0])
         if dist >= thresh:
             break
@@ -136,27 +130,8 @@ def merge_components(X, resp, means0, covs0, thresh):
     for c in range(len(means0)):
         merged_resp[:, fg[c]] += resp[:, c]
     resp_max = merged_resp[np.arange(len(X)), labels].round(3)
-    means = np.vstack([X[labels == i].mean(0) for i in range(kf)])
-    covs = np.stack([np.cov(X[labels == i].T) + reg for i in range(kf)])
     weights = np.array([(labels == i).mean() for i in range(kf)])
-    return labels, resp_max, means, covs, weights
-
-
-def shape_dispersion(means, covs, weights):
-    """How distinct a hitter's own shapes are: usage-weighted mean pairwise Mahalanobis
-    distance between cluster centroids, each pair measured against its own within-cluster
-    covariance """
-    k = len(means)
-    if k < 2:
-        return 0.0
-    num = den = 0.0
-    for i in range(k):
-        for j in range(i + 1, k):
-            dist = _pair_maha(means[i], covs[i], means[j], covs[j])
-            wpair = weights[i] * weights[j]
-            num += wpair * dist
-            den += wpair
-    return num / den if den > 0 else 0.0
+    return labels, resp_max, weights
 
 
 def main():
@@ -177,7 +152,7 @@ def main():
     assign_rows, summary_rows, batter_rows = [], [], []
     for i, ((bid, stand), g) in enumerate(df.groupby(KEY, sort=False)):
         X = g[FEATURES].to_numpy(float)
-        labels, resp_max, mu, sd, k, bic, disp = fit_batter(X)
+        labels, resp_max, mu, sd, k, bic = fit_batter(X)
         name = g["batter_full_name"].iloc[0]
         label = f"{name} ({stand})" if bid in switch_ids else name
 
@@ -202,8 +177,7 @@ def main():
                             "k": k, "bic": round(bic, 1), "min_weight": round(weights.min(), 4),
                             "min_comp_n": int(np.bincount(labels).min()),
                             "usage_entropy": round(entropy, 3),
-                            "effective_shapes": round(float(np.exp(entropy)), 2),
-                            "shape_dispersion": round(disp, 3)})
+                            "effective_shapes": round(float(np.exp(entropy)), 2)})
         if (i + 1) % 100 == 0:
             print(f"  ...{i+1}/{len(cohort)} units")
 
@@ -225,10 +199,7 @@ def write_catalog(rep, summary):
     w(f"- Cohort: **{len(rep)} (batter, stand) units**, **{int(rep.n_swings.sum()):,} swings** "
       f"(switch hitters contribute one unit per stance)")
     w(f"- Repertoire size (k) — mean {rep.k.mean():.2f}, median {int(rep.k.median())}")
-    w(f"- Effective shapes (exp usage-entropy) — mean {rep.effective_shapes.mean():.2f}")
-    w(f"- Shape dispersion (usage-wtd mean pairwise within-cluster Mahalanobis) — "
-      f"mean {rep.shape_dispersion.mean():.2f}, median {rep.shape_dispersion.median():.2f} "
-      f"(k=1 hitters contribute 0; within-batter scale, not yet cross-batter comparable)\n")
+    w(f"- Effective shapes (exp usage-entropy) — mean {rep.effective_shapes.mean():.2f}\n")
 
     w("## BIC-selection sanity: are any components degenerate? (no occupancy floor is imposed)")
     w(f"- smallest mixture weight across hitters — min {rep.min_weight.min():.3f}, "
@@ -244,12 +215,7 @@ def write_catalog(rep, summary):
 
     w("## Widest repertoires (most effective shapes)")
     top = rep.sort_values("effective_shapes", ascending=False).head(10)
-    w(top[["label", "n_swings", "k", "effective_shapes", "shape_dispersion"]]
-      .to_markdown(index=False) + "\n")
-
-    w("## Most distinct repertoires (shapes most separated from each other, >=800 swings)")
-    disp = rep[rep.n_swings >= 800].sort_values("shape_dispersion", ascending=False).head(10)
-    w(disp[["label", "n_swings", "k", "effective_shapes", "shape_dispersion"]]
+    w(top[["label", "n_swings", "k", "effective_shapes"]]
       .to_markdown(index=False) + "\n")
 
     w("## Most one-note hitters (fewest effective shapes, >=800 swings)")

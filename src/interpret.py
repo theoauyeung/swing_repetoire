@@ -86,7 +86,7 @@ def archetype_name(centroid):
     return f"{vert} {direction}"
 
 
-def fit_lexicon(cent):
+def fit_archetype(cent):
     """League-standardize the geometry-centroid pool, fit the archetype GMM, tag every
     unit-cluster. bat_speed is not fitted — reported per archetype as a descriptor.
     Returns (cent + archetype cols, lexicon dataframe)."""
@@ -154,7 +154,7 @@ def write_catalog(shapes, lex):
 def main():
     cent = load_centroids()
     print(f"Loaded {len(cent):,} unit-cluster centroids (pull frame)")
-    shapes, lex = fit_lexicon(cent)
+    shapes, lex = fit_archetype(cent)
 
     keep = (["batter_id", "batter_stand", "cluster", "label", "archetype", "archetype_name",
              "arch_confidence", "n", "weight"] + FEAT)

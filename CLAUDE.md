@@ -10,8 +10,8 @@ Research project on MLB swing shapes using Statcast bat tracking (2024+). Two qu
    xRV model grades each shape's run value conditioned on context (count, location, pitch type,
    base-out state).
 2. **Repertoire diversity (Facet 2)** — batter-level scalars (repertoire size, usage entropy,
-   shape dispersion, context-responsiveness) test whether a wider, more *adjustable* repertoire
-   improves outcomes.
+   repertoire expansiveness, context-responsiveness) test whether a wider, more *adjustable*
+   repertoire improves outcomes.
 
 `docs/research-design.md` is the source of truth for methodology, confirmed design decisions,
 limitations, and milestones. **Read it before modeling work** — the design decisions there
@@ -50,14 +50,25 @@ python src/cluster.py     # per-batter GMM -> cluster_* + batter_repertoire + cl
 python src/xRV_model.py   # bespoke per-swing xRV -> xrv_swings.parquet (+ xrv_grade)
 python src/interpret.py   # Layer-1 archetype lexicon -> shape_archetypes + archetype_lexicon.md
 python src/cards.py       # Layer-2 swing ID cards -> shape_cards.parquet + shape_cards_catalog.md
+python src/repertoire.py  # Facet-2 Repertoire+ (repertoire expansiveness) -> repertoire_scores.parquet + repertoire_catalog.md
 ```
 
 **Pipeline order:** extract → features → cluster → xrv (built). `interpret.py` (Layer 1 = cross-unit
 archetype lexicon) and `cards.py` (Layer 2 = per-hitter swing ID cards: name-delta-vs-primary,
 over-index when-label, grade + within-batter matched contrast) are the interpretability overlay and
-consume cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `value_model → within_batter →
-diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; there is
-no test suite or build step yet.
+consume cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py` (Facet-2
+repertoire expansiveness = **Repertoire+**) consumes cluster_summary + swings_model and is the first
+built Facet-2 stage; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage
+is a standalone script with a `main()`; there is no test suite or build step yet.
+
+**Repertoire+ (`repertoire.py`):** purely descriptive repertoire *width* — usage-weighted mean pairwise
+Euclidean distance between a unit's cluster centroids, each of the 5 shape features standardized by
+**cohort (league) swing-level SD** so it's cross-hitter comparable (rankable). Geometry only: no run
+value / quality / adjustability. All 5 features equal-weighted (incl. bat_speed). Lead with
+`repertoire_pctile`, not `repertoire_plus` (24% of units are single-shape → 0-spread floor spike that skews
+the "50 = average" reference). `repertoire_plus` is on the **same scale as Swing+** — `50 + 10·z`
+clipped to [0, 100], 50 = league-average width — not the OPS+-style `100 + 10·z` it used originally.
+Reuses cluster_summary's raw centroids directly — the horz_attack_angle pull-mirror is distance-invariant.
 
 **Archetype lexicon (`interpret.py`):** archetypes are defined on the **4 geometry features only**
 (tilt, length, VAA, HAA_pull); `bat_speed` is a reported descriptor, not a defining axis (its
@@ -68,6 +79,16 @@ level-oppo ↔ uppercut-pull diagonal. `cards.py` (Layer 2) enriches each with a
 (top-3 over-indexed situations) → `archetype_detailed`, so same-archetype shapes read apart;
 cluster 0 (the primary swing) is labeled `"Primary"` in `archetype_detailed` (true archetype stays
 in `archetype_name`).
+
+**Notebook plot theme:** standard analytical charts use `plt.style.context('fivethirtyeight')` with a
+white-background override (`figure/axes/savefig.facecolor='white'`, and **`grid.color='#cbcbcb'`** —
+fivethirtyeight's default grid is white and vanishes on a white bg). The `usage_heatmap` pandas Styler
+(cell 10) is a white-bg table with a fivethirtyeight blue→white→red diverging gradient (`FT_DIV`) to
+match. Only the bespoke Baseball-Savant swing cards in `cluster_results.ipynb` (cell 8, dark navy
+`BG/INK/MUT/GRID` palette + hand-drawn art) stay dark by design. Both notebooks run on the
+**`driveline`** Jupyter kernel. Notebook-authoring gotcha:
+don't build cell source via a triple-quoted string with `\n` + `splitlines()` (the escapes become real
+newlines and split string literals) — use an explicit line list.
 
 **Handedness convention (validated vs `bearing_angle`; got this wrong once — see worklog 2026-07-09):**
 `horz_attack_angle` is **batter-relative** (raw + = opposite field for both hands), so the pull
@@ -111,8 +132,7 @@ DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` 
   competitive swings **per `(batter, stand)` unit** (lowered from pooled-300 to keep switch
   hitters' weaker side). Post-merge: mean k ≈1.9, median 2, max 5.
 - **Known confound:** count-based diversity metrics (`k`, `effective_shapes`) correlate with
-  `n_swings` (r≈0.71) — must be sample-size-controlled before Facet 2. `shape_dispersion` is
-  exempt (confirmed ~orthogonal to `n_swings`).
+  `n_swings` (r≈0.71) — must be sample-size-controlled before Facet 2.
 
 ## xRV status
 

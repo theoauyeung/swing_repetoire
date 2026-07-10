@@ -209,8 +209,23 @@ scalars that don't require shared cluster IDs:**
 - **Usage entropy / effective shapes:** Shannon entropy of mixture weights → "effective
   number of shapes actually used" (a hitter with k=5 but 95% in one cluster is effectively
   monolithic).
-- **Shape dispersion:** total volume / mean pairwise centroid distance in standardized shape
-  space (how *spread out* the repertoire is, not just how many pieces).
+- **Repertoire+ (repertoire expansiveness):** a purely descriptive, cross-hitter-comparable
+  measure of how *wide* a repertoire is — usage-weighted mean pairwise Euclidean distance
+  between a unit's cluster centroids, with each of the 5 shape features standardized by the
+  **cohort (league) swing-level SD** so mph and degrees are commensurable. Scaled Repertoire+ =
+  `50 + 10·z` clipped to [0, 100] (same 0-100 / 50-average scale as Swing+); report
+  `repertoire_pctile` as the headline (24% of units are single-shape and pile up at the 0-spread
+  floor, skewing the "50 = average" reference — the percentile is robust to it). Built in `src/repertoire.py` → `repertoire_scores.parquet` + `repertoire_catalog.md`.
+  Uses the **league frame** (standardize by cohort swing-level SD) precisely so the spread is
+  rankable across hitters. Design decisions (confirmed): **geometry only, no run value /
+  quality / adjustability** — a wide and a narrow repertoire are graded purely on spread; **all 5
+  features equal-weighted** (incl. `bat_speed`, which the archetype lexicon excludes but is
+  wanted here); **usage-weighted** (a rarely-used shape barely widens the repertoire); **mean**
+  (not max) pairwise distance. The `horz_attack_angle` pull-mirror is a uniform negation and
+  distances use differences, so the mirror leaves every distance unchanged — `cluster_summary`'s
+  raw centroids give the identical result. Caveat: width is driven mostly by `swing_length` +
+  the two attack angles; `horz_attack_angle` is the most pitch-reactive feature (ICC 0.054), so
+  a horz-driven wide repertoire partly reflects pitch-location variety, not genuine swing change.
 
 **Adjustability** is distinct from raw diversity and is the crux: diversity is only valuable
 if shapes are deployed *appropriately*. Operationalize as:
@@ -267,12 +282,10 @@ isn't mistaken for a skill.
    treat agreement as independent confirmation — it's a calibration check, not validation of
    the causal contrast.
 10. **Small handedness lean in diversity metrics.** L-stand units average slightly more effective
-    shapes and dispersion than R-stand units (partial corr with an L-flag ≈ +0.11 net of
-    `n_swings`; not a sample-size confound, and provably *not* a `horz_attack_angle`-mirror
-    artifact — Mahalanobis distance is invariant to the sign flip). Small (~0.18 effective shapes,
-    ~0.06 dispersion) but real; plausibly a platoon/approach difference or a batter-side
-    measurement asymmetry. Consider including `batter_stand` as a covariate in the Facet 2 payoff
-    regression rather than assuming L/R units are exchangeable.
+    shapes than R-stand units (partial corr with an L-flag ≈ +0.11 net of `n_swings`; not a
+    sample-size confound). Small (~0.18 effective shapes) but real; plausibly a platoon/approach
+    difference or a batter-side measurement asymmetry. Consider including `batter_stand` as a
+    covariate in the Facet 2 payoff regression rather than assuming L/R units are exchangeable.
 
 ---
 

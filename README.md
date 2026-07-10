@@ -11,8 +11,8 @@ locally / not published to this repo).
 ### Two facets
 1. **Swing-shape value** — per-batter GMM clusters swing shapes; a bespoke xRV model assigns each
    shape a run value conditioned on count, pitch location, pitch type, and base-out state.
-2. **Repertoire diversity** — batter-level metrics for repertoire size, usage entropy, shape
-   dispersion, and context-responsiveness; tests whether adjustability pays off.
+2. **Repertoire diversity** — batter-level metrics for repertoire size, usage entropy, repertoire
+   expansiveness, and context-responsiveness; tests whether adjustability pays off.
 
 ### Usage
 Scripts are standalone pipeline stages, run in order from the repo root:

@@ -1,5 +1,123 @@
 # Worklog
 
+## cluster_results.ipynb — repertoire-size distribution plot + fivethirtyeight-white theme (2026-07-09)
+
+- **Added a distribution plot (user ask):** a 2-panel figure of how many distinct swing shapes each
+  `(batter, stand)` unit carries — left = repertoire size `k` (bar, 168/24% k=1, 428/61% k=2,
+  91/13% k=3, 13/2% k=4, 3/0% k=5), right = `effective_shapes` = `exp(usage entropy)` histogram
+  (spike at 1.0 for one-shape units, band near 2, mean 1.81). Both read from `rep`
+  (batter_repertoire), appended as a new markdown + code cell at the end of the notebook.
+- **Theme change (user): standard analytical charts → fivethirtyeight with a WHITE background.**
+  Converted the archetype scatter (bat_speed vs VAA) and built the new distribution plot in
+  `plt.style.context('fivethirtyeight')` with an rcParams override to white
+  (`figure/axes/savefig.facecolor='white'`, `grid.color='#cbcbcb'` so the grid shows on white —
+  fivethirtyeight's default grid is white, invisible on a white bg; that recolor is the key step).
+  **Left the bespoke Baseball-Savant swing cards (cell 8) in their dark theme** per user scope
+  choice — fivethirtyeight doesn't compose with the hand-drawn card art. Kept the archetype palette
+  (`ARCH_PAL`) but bumped point alpha to 0.7 so the tan Level-Center points read on white.
+- **Gotcha (notebook authoring):** writing cell source via a triple-quoted Python string containing
+  `\n` + `.splitlines(keepends=True)` turned the intended in-string `\n` escapes into real newlines,
+  splitting string literals (SyntaxError). Fixed by building source as an explicit line list and
+  inserting real backslash-n via `chr(92)+'n'` for the multi-line titles/labels.
+- Set the notebook kernelspec to `driveline` (was generic `python3`). Re-executed headlessly
+  (`nbconvert --execute --kernel driveline`, exit 0); both new/updated plots render with white bg.
+- **Follow-up (user): rethemed the `usage_heatmap` pandas Styler (cell 10) too.** Swapped its custom
+  Savant blue→off-white→red colormap for a fivethirtyeight-consistent `FT_DIV` blue (`#30a2da`) →
+  white → red (`#fc4f30`) diverging gradient, and added explicit `set_table_styles` (white bg, dark
+  `#3c3c3c` text, light `#cbcbcb`/`#ececec` borders) so the table matches the plots. Re-executed clean.
+  Now only the bespoke Savant swing cards (cell 8) remain dark by design.
+
+## swing+_results.ipynb — fixed Repertoire+ leaderboard + merged Swing+ (2026-07-09)
+
+- **Fixed the "Swing Repertoire" cell (cell 7).** It was `print()`ing the DataFrame (plain text, no
+  rich table) and its `.round({'repertoire_plus': 0})` targeted a column already renamed to
+  `Repertoire+`, so it silently didn't round. Now returns the DataFrame as the cell value (rich HTML
+  table) with correct per-column rounding, sorted by Repertoire+ desc, leading with the percentile.
+- **Merged Swing+ into the leaderboard (user ask).** Added a unit-level **Swing+** column = mean
+  `xrv_grade` over each `(batter_id, batter_stand)` unit's 2024-25 swings (join `cluster_assignments`
+  play_ids → `xrv_swings`), merged onto `repertoire_scores` by (batter_id, batter_stand). Columns:
+  Batter / R/L / Shapes (k) / Repertoire pctile / Repertoire+ / Swing+. Confirms the two axes are
+  independent — the widest repertoires (Repertoire+ ~111-114) carry ~league-average Swing+ (~48-50),
+  i.e. profile *width* is orthogonal to swing *quality*.
+- **Set the notebook kernelspec to `driveline`** (was the generic `python3` / "defaultInterpreterPath"
+  display). Re-executed the whole notebook headlessly (`nbconvert --execute --kernel driveline`,
+  exit 0); all cells clean, 703 units in the leaderboard.
+
+## Renamed Arsenal+ → Repertoire+ (2026-07-09)
+
+- **Per user: renamed the expansiveness metric and its stage from "Arsenal" to "Repertoire"**
+  everywhere in scripts and current-state docs. `src/arsenal.py` → `src/repertoire.py`; columns
+  `arsenal_plus`/`arsenal_pctile` → `repertoire_plus`/`repertoire_pctile`; outputs
+  `arsenal_scores.parquet` + `arsenal_catalog.md` → `repertoire_scores.parquet` +
+  `repertoire_catalog.md` (old files deleted, new ones regenerated — cohort/values identical, pure
+  rename). Docs updated: `research-design.md` Part D, `CLAUDE.md` (pipeline cmd + Repertoire+
+  section), `README.md`, and the prior worklog entries' references to our metric.
+- **Kept unchanged (proper nouns, NOT our metric):** the pitcher "paint mixer" **arsenal score**
+  concept and the source repo `drivelineresearch/arsenal_construction` — those are real external
+  names, not the swing metric.
+
+## Removed the `shape_dispersion` metric (2026-07-09)
+
+- **Per user: dropped `shape_dispersion` entirely** from scripts and current-state descriptions.
+  It is superseded by Repertoire+ (the cross-hitter-comparable, league-frame expansiveness metric);
+  `shape_dispersion`'s within-batter Mahalanobis frame was deliberately not rankable, so it had no
+  consumer once Repertoire+ existed. No downstream code read the column (verified: only `cluster.py`
+  produced it; the notebook reference was stale render output).
+- **`cluster.py`:** removed the `shape_dispersion()` function, its call in `fit_batter`, the
+  `batter_repertoire` column, and the two catalog sections that used it ("Shape dispersion" header
+  line, the column in the widest-repertoires table, and the "Most distinct repertoires" table).
+  **Preserved `_pair_maha` + the `merge_components` post-BIC merge loop** — those use Mahalanobis
+  distance internally for the MERGE_SEP over-split fix and are unrelated to the reported metric.
+  (A concurrent botched edit had deleted `_pair_maha` and the merge `while` loop while leaving the
+  callers, which would have silently disabled merging and ballooned k back to the BIC over-split
+  values; caught and restored.) `merge_components` now returns `labels, resp_max, weights` (dropped
+  the post-merge `means`/`covs` that only fed `shape_dispersion`).
+- Re-ran `cluster.py`: cohort + k distribution **unchanged** (703 units; k mean 1.94, median 2,
+  max 5; dist 168/428/91/13/3) — confirms the merge logic still behaves identically. Regenerated
+  `batter_repertoire.parquet` (no `shape_dispersion` col) + `cluster_catalog.md`. Re-ran
+  `repertoire.py` (unaffected — reads cluster_summary). Cleared the stale `rep.head()` output cell in
+  `cluster_results.ipynb`.
+- Docs scrubbed: `research-design.md` (Part D bullet + Limitation #10 dispersion mention),
+  `CLAUDE.md` (Facet-2 scalar list, Repertoire+ contrast, confound note), `README.md`. Historical
+  worklog entries left intact (append-only audit log — they were accurate when written).
+
+## Facet 2 — Repertoire+ (repertoire expansiveness), `src/repertoire.py` (2026-07-09)
+
+- **New Facet-2 stage (user brainstorm, modeled loosely on the pitcher "paint mixer" arsenal score
+  in `drivelineresearch/arsenal_construction`).** Walked the user through the paint-mixer method
+  (portfolio-theory pitch-mix optimizer: run-value returns + overuse decay curves + pairwise
+  "buyback" interaction + entropy penalty + SLSQP usage optimizer) and the mapping to swings. The
+  central mismatch: **pitchers freely choose usage; a hitter's swing shape is largely reactive** to
+  the pitch (design Limitation #2), so the prescriptive optimizer/decay/buyback machinery does not
+  port. After iterating, the user narrowed the metric all the way down to **purely descriptive
+  geometric spread** — nothing about run value, shape quality, or deployment. Wider profile (bigger
+  gaps between clusters in bat speed / angles) = bigger repertoire.
+- **`repertoire.py`** (consumes cluster_summary + swings_model): per (batter, stand), expansiveness =
+  **usage-weighted mean pairwise Euclidean distance between cluster centroids**, each of the 5 shape
+  features standardized by the **cohort swing-level SD** (makes mph/deg commensurable AND rankable
+  across hitters). `repertoire_plus = 100 + 10·z`; also `repertoire_pctile` + per-feature raw-unit spread
+  breakdown. Outputs `repertoire_scores.parquet` (703 units) + `repertoire_catalog.md`.
+- **Key distinction from `shape_dispersion`:** that metric is scaled in each hitter's *own*
+  within-cluster scatter (Mahalanobis), deliberately NOT cross-hitter comparable (worklog 2026-07-07).
+  Repertoire+ uses the **league frame** so it's rankable — the whole point of a score. Reuses
+  cluster_summary's raw centroids directly: the `horz_attack_angle` pull-mirror is a uniform negation
+  and pairwise distances use differences, so the mirror is distance-invariant (verified reasoning).
+- **Design decisions (all user-confirmed via option walkthrough):** geometry only (no value); all 5
+  features equal-weighted incl. bat_speed (archetype lexicon excludes bat_speed, but it's wanted
+  here); usage-weighted (π_i·π_j), not capability; mean pairwise, not max; keep k=1 units in the
+  distribution but **lead with `repertoire_pctile`** since 168 single-shape units (24%) pile up at the
+  0-spread floor and drag the Repertoire+ mean below the multi-shape median (mean exp 1.80 vs median
+  2.26 → Repertoire+ 100 sits below the k≥2 median of 105.4). Repertoire+ is a monotone transform of the
+  same ranking, so pctile and + agree on order.
+- **Findings:** expansiveness mean 1.80 / median 2.26 / max 3.28. k dist 168/428/91/13/3 (k=1..5).
+  Per-feature contribution in league-SD units (multi-shape): swing_length 1.34, horz_attack_angle
+  1.30, vert_attack_angle 1.22, bat_speed 0.41, swing_path_tilt 0.35. **Caveat flagged:** width is
+  driven by length + attack angles; the biggest angle contributor (`horz_attack_angle`) is also the
+  most pitch-reactive feature (ICC 0.054), so a horz-driven wide repertoire partly reflects
+  pitch-location variety, not genuine swing change. Widest: Johnathan Rodríguez, Michael Toglia (L),
+  Spencer Jones, Bo Bichette (all big horz + VAA gaps). Narrowest multi-shape: Willie Calhoun,
+  Ryan Kreidler, Royce Lewis.
+
 ## swing+_results.ipynb — archetype column on the cluster leaderboards (2026-07-09)
 
 - Added an **Archetype** column (Layer-1 label from `shape_archetypes.parquet`) to the per-shape
