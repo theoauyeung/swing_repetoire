@@ -115,9 +115,10 @@ DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` 
   Parquet is the interchange format between stages, and markdown (`profile.md`,
   `cluster_catalog.md`) is the human-readable output of each stage.
 - **`results/plots/` holds rendered notebook figures** (committed, unlike `data/`). `cluster_results.ipynb`
-  writes there via `PLOTS = ROOT / 'results' / 'plots'`: three matplotlib PNGs (`fig.savefig`) plus the
-  cell-10 usage heatmap, which is a pandas Styler saved as `.html` (no `dataframe_image` in the venv).
-  Figures aggregate cohort-level results only, so no athlete PII gate is needed.
+  writes there via `PLOTS = ROOT / 'results' / 'plots'` using `fig.savefig` (PNGs only). Table outputs
+  (the cell-10 usage heatmap, and the `swing+_results.ipynb` leaderboards) are **not saved to disk** —
+  HTML dumps were removed 2026-07-13 pending an image-export approach, so don't re-add `.to_html()`
+  saves. Figures aggregate cohort-level results only, so no athlete PII gate is needed.
 - **Competitive swing** (no DB flag exists, so `features.py` defines it): bat-tracked (5 shape
   features present) + not a bunt + `bat_speed >= 50` + angle artifacts dropped
   (`|horz_attack_angle| <= 45`, `vert_attack_angle` in [-45, 75]).

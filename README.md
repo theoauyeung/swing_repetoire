@@ -24,9 +24,9 @@ python src/cluster.py     # per-batter GMM -> data/cluster_* + batter_repertoire
 Pipeline order: `extract → features → cluster → (xrv → value_model → within_batter → diversity →
 reports, not yet built)`.
 
-Both result notebooks write their outputs to `results/plots/` (committed to the repo):
-`src/cluster_results.ipynb` saves its figures (PNGs, plus the usage-heatmap table as HTML), and
-`src/swing+_results.ipynb` saves its Swing+ / Repertoire+ leaderboards as HTML tables.
+`src/cluster_results.ipynb` saves its figures as PNGs to `results/plots/` (committed to the repo).
+The table outputs (the usage heatmap and the `swing+_results.ipynb` leaderboards) aren't saved yet —
+image export is a TODO.
 
 ## Details
 - **Project Owner:** Theo Au-Yeung

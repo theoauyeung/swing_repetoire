@@ -1,5 +1,17 @@
 # Worklog
 
+## Remove HTML table saves from both notebooks (2026-07-13)
+
+- **User: drop the HTML saves, they'll export tables as images later.** Removed the `.to_html()`
+  saving code from `cluster_results.ipynb` (cell-10 usage heatmap) and all four `swing+_results.ipynb`
+  leaderboard cells, and dropped the now-unused `PLOTS` def from the swing+ setup cell. `git rm`'d the
+  5 HTML files (`usage_heatmap_arraez`, `swingplus_leaderboard`, `swingplus_by_cluster`,
+  `swingplus_clusters_raleigh`, `repertoire_leaderboard`). PNG saves in cluster_results (swing cards,
+  archetype scatter, repertoire-size dist) are untouched. `results/plots/` is now PNG-only: don't
+  re-add `.to_html()` dumps; table→image export is the pending approach.
+- (User-side, via auto-commits: added `swing_cards_baldwin.png`, then deleted `swing_cards_ohtani.png`
+  and `mergesep_sensitivity.png` from the repo.)
+
 ## Keep 3 archetypes (retune HAA_OPPO) + swing+ notebook saves tables (2026-07-13)
 
 - **User: keep three archetypes.** Set `K_ARCH` back to 3 (a deliberate interpretability override of
