@@ -5,14 +5,14 @@ each hitter's individual swing shapes conditioned on the situation, and (2) test
 wider, more *adjustable* swing repertoire actually improves outcomes.
 
 Data source: Driveline `mlb_db` (Statcast bat tracking, MLB 2024+). See `docs/research-design.md`
-for the full design, data reality, methodology, limitations, and milestones (design doc is kept
-locally / not published to this repo).
+for the full design, data reality, methodology, limitations, and milestones (that design doc is
+kept locally and not published to this repo).
 
 ### Two facets
-1. **Swing-shape value** — per-batter GMM clusters swing shapes; a bespoke xRV model assigns each
-   shape a run value conditioned on count, pitch location, pitch type, and base-out state.
-2. **Repertoire diversity** — batter-level metrics for repertoire size, usage entropy, repertoire
-   expansiveness, and context-responsiveness; tests whether adjustability pays off.
+1. **Swing-shape value.** A per-batter GMM clusters swing shapes, and a bespoke xRV model assigns
+   each shape a run value conditioned on count, pitch location, pitch type, and base-out state.
+2. **Repertoire diversity.** Batter-level metrics for repertoire size, usage entropy, repertoire
+   expansiveness, and context-responsiveness test whether adjustability pays off.
 
 ### Usage
 Scripts are standalone pipeline stages, run in order from the repo root:
@@ -23,6 +23,9 @@ python src/cluster.py     # per-batter GMM -> data/cluster_* + batter_repertoire
 ```
 Pipeline order: `extract → features → cluster → (xrv → value_model → within_batter → diversity →
 reports, not yet built)`.
+
+`src/cluster_results.ipynb` writes its rendered figures to `results/plots/` (three PNGs plus the
+usage-heatmap table as HTML). That folder is committed to the repo.
 
 ## Details
 - **Project Owner:** Theo Au-Yeung
@@ -35,9 +38,9 @@ reports, not yet built)`.
 ## Getting Started
 
 ### Setup the environment
-This project uses the **shared `driveline` uv venv** (`~/.venvs/driveline`) — one environment
+This project uses the **shared `driveline` uv venv** (`~/.venvs/driveline`), one environment
 reused across Driveline workflow. Activate it, or select the **"Python (driveline)"** kernel in
-your IDE / for notebooks. To (re)create it:
+your IDE or for notebooks. To (re)create it:
 ```bash
 uv venv ~/.venvs/driveline --prompt driveline
 VIRTUAL_ENV=~/.venvs/driveline uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy \
@@ -47,10 +50,11 @@ source ~/.venvs/driveline/Scripts/activate   # Git Bash; Windows: ~/.venvs/drive
 ```
 
 ### Setup the project
-- `data/` (gitignored) holds all extracts. It is **never committed** — it contains player data.
+- `data/` (gitignored) holds all extracts. It is **never committed**, because it contains player
+  data.
 - DB credentials resolve from `~/.claude/.env` as `BIOMECH_DB_HOST/PORT/USER/PASS` via the
   `get_secret()` helper in `src/extract.py` (the `mlb-db-analysis` skill convention). This project
-  reads creds from that file rather than a repo-local `.env`; the template `.config`/`.env`
+  reads creds from that file rather than a repo-local `.env`. The template `.config`/`.env`
   scaffolding is retained but unused by the pipeline scripts. Read-only user, database `mlb_db`.
 
 ### Test-run

@@ -14,10 +14,12 @@ Method:
   - define archetypes on the 4 pure-geometry features only (tilt, length, VAA, HAA_pull);
     bat_speed is reported as a per-archetype descriptor, NOT a defining axis (it is state-not-trait
     cross-batter, ICC 0.126, and including it collapses the geometry grid into an effort bin),
-  - league-standardize the 1,954-centroid pool (z-score each feature across shapes, unweighted:
+  - league-standardize the 1,592-centroid pool (z-score each feature across shapes, unweighted:
     each shape is one observation so rare protective shapes get equal say in the vocabulary),
-  - fit a full-cov GMM at K_ARCH=3 (BIC min on the merged pool, post handedness-fix) — the honest
-    carve is a diagonal: Level Oppo / Level Center / Uppercut Pull (uppercut swings are pull-side),
+  - fit a full-cov GMM at K_ARCH=2 (BIC min on the merged pool, post handedness-fix + the
+    MERGE_SEP=1.75 recluster) — the honest carve is the two ends of the diagonal: Level Oppo /
+    Uppercut Pull (uppercut swings are pull-side; the old middle "Level Center" no longer earns
+    its own component under BIC once the finer clustering shifts the centroid pool),
   - name each archetype algorithmically from its centroid (vertical x direction), so names are
     reproducible regardless of GMM component ordering, and assert they come out unique.
 
@@ -48,14 +50,16 @@ DESCRIPTOR = "bat_speed"
 FEAT = GEO_FEAT + [DESCRIPTOR]          # loaded per unit-cluster; only GEO_FEAT defines archetypes
 SHORT = {"swing_path_tilt": "tilt", "swing_length": "len", "bat_speed": "bat_speed",
          "vert_attack_angle": "vaa", "horz_attack_angle_pull": "haa_pull"}
-K_ARCH = 3            # BIC minimum on the merged pool AFTER the handedness fix (features.py). Correcting
-                      # the pull frame collapsed the geometry toward a level-oppo <-> uppercut-pull
-                      # diagonal (uppercut swings are pull-side), so the honest vocabulary is 3:
-                      # Level Oppo / Level Center / Uppercut Pull. k>=4 splits the level band into
-                      # same-named near-duplicates (differ mainly in swing-plane tilt) / a tiny bin.
+K_ARCH = 2            # BIC minimum on the merged pool after the handedness fix (features.py) AND the
+                      # MERGE_SEP=1.75 recluster (worklog 2026-07-13): BIC now reads 13188.8 at K=2 vs
+                      # 13222.2 at K=3, so the honest vocabulary is 2: Level Oppo / Uppercut Pull (the
+                      # two ends of the level-oppo <-> uppercut-pull diagonal). Every K>=3 also fails
+                      # the unique-name guard below — the finer cluster pool puts two components in the
+                      # same "Level Oppo" cell (differ only in tilt), so the old middle "Level Center"
+                      # no longer stands on its own. Was 3 under MERGE_SEP=2.0.
 SEED = 7
 N_INIT = 25           # 8 restarts can settle in a worse local optimum; 25 reliably reaches the
-                      # global one. The 5 archetype *names* are seed-invariant; only a few
+                      # global one. The archetype *names* are seed-invariant; only a few
                       # boundary shapes move (seed agreement ~0.93).
 
 # name thresholds on an archetype's raw-unit centroid (degrees)

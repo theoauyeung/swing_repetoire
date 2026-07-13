@@ -37,20 +37,19 @@ DATA = ROOT / "data"
 FEATURES = ["swing_path_tilt", "swing_length", "bat_speed",
             "vert_attack_angle", "horz_attack_angle_pull"]
 RAW_CENTROID_COLS = ["swing_path_tilt", "swing_length", "bat_speed",
-                     "vert_attack_angle", "horz_attack_angle"]  # report raw (unmirrored) centroids
-MIN_SWINGS = 150      # cohort threshold, applied per (batter_id, batter_stand) unit. Lowered from
-                      # the pooled-300 rule (research-design.md) so a switch hitter's weaker side
-                      # still qualifies; k_max = n // 20 still allows up to 7 shapes at n=150.
+                     "vert_attack_angle", "horz_attack_angle"] 
+MIN_SWINGS = 150      
 D = len(FEATURES)
 PARAMS_PER_COMP = D + D * (D + 1) // 2   # free params of a full-cov Gaussian in D dims (=20 for D=5)
 PATIENCE = 3          # stop searching k once BIC fails to improve this many times in a row
 N_INIT = 5            # EM restarts per k (stabilizes the BIC estimate we now rely on)
 SEED = 7
-MERGE_SEP = 2.0       # post-BIC merge: collapse component pairs closer than this (within-cluster-SD
-                      # Mahalanobis) into one shape. BIC over-segments at large n (its ln(n) penalty
-                      # is too weak to stop it splitting trivial density bumps), producing large but
-                      # near-duplicate components; 2.0 (~16% overlap) enforces genuinely distinct
-                      # shapes. Separation-based, NOT an occupancy floor — the phantoms are big.
+MERGE_SEP = 1.75      # post-BIC merge: collapse component pairs closer than this (within-cluster-SD
+                      # Mahalanobis) into one shape. Chosen via a threshold sweep (worklog 2026-07-13):
+                      # the BIC-component separation distribution is a gapless continuum peaking at
+                      # ~2.0, so this is a judgment dial, not a data-pinned value. 1.75 (~19% overlap)
+                      # keeps mean k at 2.26 (vs 1.94 at 2.0) and cuts single-shape units 24%->13% for
+                      # a richer Facet-2 signal, while still merging the true near-duplicate mass (<1.5).
 
 
 def fit_batter(X_raw):

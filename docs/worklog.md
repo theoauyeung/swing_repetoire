@@ -1,6 +1,45 @@
 # Worklog
 
-## cluster_results.ipynb — repertoire-size distribution plot + fivethirtyeight-white theme (2026-07-09)
+## MERGE_SEP 2.0 -> 1.75 + archetype K 3 -> 2 (2026-07-13)
+
+- **User asked whether MERGE_SEP=2.0 was too aggressive** (mean 1.94 shapes felt low). Ran a
+  threshold sweep: BIC-select each of the 703 units once, then apply the merge at 1.0..3.5 and also
+  dump the pre-merge pairwise-separation distribution (2,194 component pairs). Saved
+  `results/plots/mergesep_sensitivity.png`.
+- **Finding: no natural gap.** The BIC-component separations are a gapless continuum peaking right
+  at ~2.0 (median 2.15), so MERGE_SEP is a judgment dial, not a data-pinned value (same continuum
+  reason ICL was rejected). 2.0 sat on the steepest part of the mean-k curve. The true near-duplicate
+  mass (BIC phantom splits) is only the <1.5 band (~10% of pairs); everything >=1.5 is at least
+  modestly separated. Sweep: T=1.5 -> mean 2.50 / 11% k=1; T=1.75 -> 2.26 / 13%; T=2.0 -> 1.94 / 24%;
+  T=2.25 -> 1.55 / 49%; T=2.5 -> 1.20 / 81%.
+- **Decision (user): loosen to 1.75.** Keeps every pair below 1.75 SD merged (~19% overlap) but
+  recovers 1.75-2.0 shapes. New cluster.py output: mean k 2.26, median 2, max 6, k-dist
+  91/408/147/42/14/1, effective_shapes 2.10, single-shape units 24%->13%. Reran cluster -> interpret
+  -> cards -> repertoire; xrv untouched (per-swing, cluster-independent).
+- **Cascade into Layer 1 (interpret.py): archetype count 3 -> 2.** The finer cluster pool (1,592
+  centroids) moved the BIC minimum for K_ARCH to 2 (BIC 13188.8 at K=2 vs 13222.2 at K=3), and every
+  K>=3 now also trips the unique-name guard (two components land in the same "Level Oppo" naming
+  cell, differing only in tilt). So the lexicon is now **Level Oppo (1006) / Uppercut Pull (586)**;
+  the old middle "Level Center" no longer earns its own component. Set K_ARCH=2 per the documented
+  BIC-min rule. cards.py `archetype_detailed` still works (Arraez now k=6).
+- Regenerated all notebook plots against the new data. Updated CLAUDE.md + research-design.md
+  (threshold, mean k, single-shape %, archetype count/names).
+
+## cluster_results.ipynb: save plots to results/plots/ (2026-07-13)
+
+- **Added plot-saving to the notebook (user ask).** Cell 1 now defines `PLOTS = ROOT / 'results'
+  / 'plots'` and `mkdir(parents=True, exist_ok=True)`. Each visual cell writes its output there:
+  cell 8 `swing_cards('Arraez', save=PLOTS / 'swing_cards_arraez.png')` (the function already had a
+  `save=` param), cell 13 `archetype_batspeed_vs_vaa.png`, cell 15 `repertoire_size_distribution.png`
+  (both `fig.savefig(..., dpi=130, bbox_inches='tight')` inside the fivethirtyeight-white context so
+  the white facecolor carries into the file).
+- **Heatmap is a pandas Styler, not a matplotlib fig**, and `dataframe_image` is not installed, so
+  cell 10 saves `usage_heatmap_arraez.html` via `_hm.to_html()` (jinja2 already present) instead of a
+  PNG. The other three are PNGs. If we want image parity, add `dataframe_image` to the venv and swap
+  to `dfi.export`.
+- **`results/` is not gitignored**, so the folder is committable. Generated all four files headlessly
+  by exec-ing the notebook's own cell sources (setup 1/2/3/12 then plot cells 8/10/13/15) under the
+  Agg backend, so the notebook stays the single source of the plotting code.
 
 - **Added a distribution plot (user ask):** a 2-panel figure of how many distinct swing shapes each
   `(batter, stand)` unit carries — left = repertoire size `k` (bar, 168/24% k=1, 428/61% k=2,
