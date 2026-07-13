@@ -1,5 +1,18 @@
 # Worklog
 
+## Table outputs saved as PNGs via dataframe_image (2026-07-13)
+
+- **User: wire up dataframe_image to save the tables as images.** Installed `dataframe_image` into
+  the `driveline` venv and re-added saving to both notebooks, now as PNGs:
+  `cluster_results.ipynb` cell 10 exports the usage-heatmap Styler, and `swing+_results.ipynb`
+  exports all four leaderboards (restored the `PLOTS` def + a `dfi` import in its setup cell).
+- **Backend = `matplotlib`, not chrome/selenium.** `dfi.export(obj, str(path),
+  table_conversion='matplotlib')` needs no browser binary (the default `chrome` backend would fail
+  headless here) and renders the heatmap's `background_gradient` correctly. Verified all 5 table PNGs
+  plus the existing figure PNGs. Note `dfi.export` wants a `str` path, not a `Path`.
+- `results/plots/` is now 9 PNGs (4 figures + 5 tables). Docs updated (env dep list, results/plots
+  convention, README).
+
 ## Remove HTML table saves from both notebooks (2026-07-13)
 
 - **User: drop the HTML saves, they'll export tables as images later.** Removed the `.to_html()`

@@ -31,7 +31,7 @@ that kernel for `.ipynb` files.
 # one-time setup (already done on this machine):
 uv venv ~/.venvs/driveline --python <miniforge python> --prompt driveline
 VIRTUAL_ENV=~/.venvs/driveline uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy \
-    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel
+    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel dataframe_image
 
 # activate for a terminal session (Git Bash):
 source ~/.venvs/driveline/Scripts/activate
@@ -40,7 +40,8 @@ VIRTUAL_ENV=~/.venvs/driveline uv pip install <pkg>
 ```
 
 `tabulate` is required (`cluster.py`'s `.to_markdown()`); `matplotlib` for the viz notebook;
-`jinja2` for pandas `.style` (heatmaps in `cluster_results.ipynb`).
+`jinja2` for pandas `.style` (heatmaps in `cluster_results.ipynb`); `dataframe_image` to save
+table/Styler outputs as PNGs (see `results/plots/` note below).
 
 Run pipeline stages from repo root with the `driveline` env active (each reads/writes `data/`):
 
@@ -114,11 +115,13 @@ DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` 
 - **`data/` is gitignored** and holds all extracts. Never commit it; it contains athlete data.
   Parquet is the interchange format between stages, and markdown (`profile.md`,
   `cluster_catalog.md`) is the human-readable output of each stage.
-- **`results/plots/` holds rendered notebook figures** (committed, unlike `data/`). `cluster_results.ipynb`
-  writes there via `PLOTS = ROOT / 'results' / 'plots'` using `fig.savefig` (PNGs only). Table outputs
-  (the cell-10 usage heatmap, and the `swing+_results.ipynb` leaderboards) are **not saved to disk** —
-  HTML dumps were removed 2026-07-13 pending an image-export approach, so don't re-add `.to_html()`
-  saves. Figures aggregate cohort-level results only, so no athlete PII gate is needed.
+- **`results/plots/` holds rendered notebook outputs as PNGs** (committed, unlike `data/`). Both
+  notebooks write there via `PLOTS = ROOT / 'results' / 'plots'`: matplotlib figures via `fig.savefig`,
+  and table/Styler outputs (the cell-10 usage heatmap, the `swing+_results.ipynb` leaderboards) via
+  `dataframe_image.export(obj, str(path), table_conversion='matplotlib')`. Use the **`matplotlib`**
+  backend, not the default `chrome`/`selenium` (no browser in this env; `matplotlib` renders the
+  gradient heatmap fine and needs no extra binary). Figures aggregate cohort-level results only, so no
+  athlete PII gate is needed.
 - **Competitive swing** (no DB flag exists, so `features.py` defines it): bat-tracked (5 shape
   features present) + not a bunt + `bat_speed >= 50` + angle artifacts dropped
   (`|horz_attack_angle| <= 45`, `vert_attack_angle` in [-45, 75]).

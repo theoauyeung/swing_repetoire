@@ -24,9 +24,10 @@ python src/cluster.py     # per-batter GMM -> data/cluster_* + batter_repertoire
 Pipeline order: `extract → features → cluster → (xrv → value_model → within_batter → diversity →
 reports, not yet built)`.
 
-`src/cluster_results.ipynb` saves its figures as PNGs to `results/plots/` (committed to the repo).
-The table outputs (the usage heatmap and the `swing+_results.ipynb` leaderboards) aren't saved yet —
-image export is a TODO.
+Both result notebooks save their outputs as PNGs to `results/plots/` (committed to the repo):
+`src/cluster_results.ipynb` writes its figures and the usage-heatmap table, and
+`src/swing+_results.ipynb` writes its Swing+ / Repertoire+ leaderboards. Tables are rendered with
+`dataframe_image` (matplotlib backend).
 
 ## Details
 - **Project Owner:** Theo Au-Yeung
@@ -45,7 +46,7 @@ your IDE or for notebooks. To (re)create it:
 ```bash
 uv venv ~/.venvs/driveline --prompt driveline
 VIRTUAL_ENV=~/.venvs/driveline uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy \
-    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel
+    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel dataframe_image
 python -m ipykernel install --user --name driveline --display-name "Python (driveline)"
 source ~/.venvs/driveline/Scripts/activate   # Git Bash; Windows: ~/.venvs/driveline/Scripts/activate.bat
 ```
