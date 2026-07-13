@@ -1,5 +1,20 @@
 # Worklog
 
+## Keep 3 archetypes (retune HAA_OPPO) + swing+ notebook saves tables (2026-07-13)
+
+- **User: keep three archetypes.** Set `K_ARCH` back to 3 (a deliberate interpretability override of
+  the raw BIC min, which is 2 on the MERGE_SEP=1.75 pool — a slim 13188.8 vs 13222.2 margin). At K=3
+  the two level components collided in the "Level Oppo" naming cell (they split on horz attack:
+  haa_pull ≈−5.6 vs ≈−7.6), so retuned the naming boundary `HAA_OPPO` −5.0→−6.5 to name them apart.
+  Restores **Level Oppo (573) / Level Center (446) / Uppercut Pull (573)**. Reran interpret → cards;
+  regenerated cluster_results plots.
+- **User: save plots in swing+_results.ipynb too.** That notebook has no matplotlib figures — it's
+  four leaderboard tables (Swing+ top 25, Swing+ by cluster, a per-hitter helper demo, Repertoire+).
+  Added a `PLOTS = ROOT / 'results' / 'plots'` and each cell now writes its table via `.to_html()`
+  (same HTML approach as the cluster_results heatmap, since there's no image backend):
+  `swingplus_leaderboard.html`, `swingplus_by_cluster.html`, `swingplus_clusters_raleigh.html`,
+  `repertoire_leaderboard.html`.
+
 ## MERGE_SEP 2.0 -> 1.75 + archetype K 3 -> 2 (2026-07-13)
 
 - **User asked whether MERGE_SEP=2.0 was too aggressive** (mean 1.94 shapes felt low). Ran a

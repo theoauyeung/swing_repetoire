@@ -16,10 +16,11 @@ Method:
     cross-batter, ICC 0.126, and including it collapses the geometry grid into an effort bin),
   - league-standardize the 1,592-centroid pool (z-score each feature across shapes, unweighted:
     each shape is one observation so rare protective shapes get equal say in the vocabulary),
-  - fit a full-cov GMM at K_ARCH=2 (BIC min on the merged pool, post handedness-fix + the
-    MERGE_SEP=1.75 recluster) — the honest carve is the two ends of the diagonal: Level Oppo /
-    Uppercut Pull (uppercut swings are pull-side; the old middle "Level Center" no longer earns
-    its own component under BIC once the finer clustering shifts the centroid pool),
+  - fit a full-cov GMM at K_ARCH=3 — Level Oppo / Level Center / Uppercut Pull, the honest carve of
+    the level-oppo <-> uppercut-pull diagonal (uppercut swings are pull-side). On the MERGE_SEP=1.75
+    pool the raw BIC minimum is 2, so K=3 is a deliberate interpretability override (kept for the
+    useful middle band; see K_ARCH note). The two level components separate on horz attack, so the
+    OPPO naming boundary is tuned to -6.5 to name them apart,
   - name each archetype algorithmically from its centroid (vertical x direction), so names are
     reproducible regardless of GMM component ordering, and assert they come out unique.
 
@@ -50,13 +51,15 @@ DESCRIPTOR = "bat_speed"
 FEAT = GEO_FEAT + [DESCRIPTOR]          # loaded per unit-cluster; only GEO_FEAT defines archetypes
 SHORT = {"swing_path_tilt": "tilt", "swing_length": "len", "bat_speed": "bat_speed",
          "vert_attack_angle": "vaa", "horz_attack_angle_pull": "haa_pull"}
-K_ARCH = 2            # BIC minimum on the merged pool after the handedness fix (features.py) AND the
-                      # MERGE_SEP=1.75 recluster (worklog 2026-07-13): BIC now reads 13188.8 at K=2 vs
-                      # 13222.2 at K=3, so the honest vocabulary is 2: Level Oppo / Uppercut Pull (the
-                      # two ends of the level-oppo <-> uppercut-pull diagonal). Every K>=3 also fails
-                      # the unique-name guard below — the finer cluster pool puts two components in the
-                      # same "Level Oppo" cell (differ only in tilt), so the old middle "Level Center"
-                      # no longer stands on its own. Was 3 under MERGE_SEP=2.0.
+K_ARCH = 3            # Three-way vocabulary: Level Oppo / Level Center / Uppercut Pull, the honest
+                      # carve of the level-oppo <-> uppercut-pull diagonal. NOTE this is a deliberate
+                      # interpretability override of the BIC minimum, which is 2 on the current
+                      # MERGE_SEP=1.75 pool (BIC 13188.8 at K=2 vs 13222.2 at K=3 — a slim margin). We
+                      # keep 3 because the middle Level-Center band is a real, useful distinction for
+                      # readers; K=3 is a shallow local BIC bump, not a degenerate split. At K=3 the
+                      # two level components differ mainly in horz attack (haa_pull ~-5.6 vs ~-7.6), so
+                      # HAA_OPPO below is tuned to -6.5 to name them apart (Center vs Oppo). Was BIC-min
+                      # 3 under MERGE_SEP=2.0; the recluster moved the raw BIC-min to 2.
 SEED = 7
 N_INIT = 25           # 8 restarts can settle in a worse local optimum; 25 reliably reaches the
                       # global one. The archetype *names* are seed-invariant; only a few
@@ -64,7 +67,10 @@ N_INIT = 25           # 8 restarts can settle in a worse local optimum; 25 relia
 
 # name thresholds on an archetype's raw-unit centroid (degrees)
 VAA_FLAT, VAA_STEEP = 3.0, 13.0        # vert_attack_angle: <flat / level / >=uppercut (~6deg = level)
-HAA_OPPO, HAA_PULL = -5.0, 5.0         # horz_attack_angle_pull: <oppo / center / >=pull (+ = pull, both hands)
+HAA_OPPO, HAA_PULL = -6.5, 5.0         # horz_attack_angle_pull: <oppo / center / >=pull (+ = pull, both hands).
+                                       # OPPO boundary moved -5.0 -> -6.5 (2026-07-13) to split the two
+                                       # K=3 level components (haa_pull ~-5.6 Center vs ~-7.6 Oppo) that
+                                       # collided under the MERGE_SEP=1.75 pool; restores Level Center.
 
 
 def load_centroids():

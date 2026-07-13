@@ -76,12 +76,13 @@ distance-invariant.
 **Archetype lexicon (`interpret.py`):** archetypes are defined on the **4 geometry features only**
 (tilt, length, VAA, HAA_pull). `bat_speed` is a reported descriptor, not a defining axis, because
 its "state not trait" ICC drags a 5-feature carve into an effort bin. This is only a naming
-overlay; `cluster.py` still defines shapes with all 5 features. There are 2 archetypes (BIC on the
-post-merge, handedness-corrected pool): **Level Oppo / Uppercut Pull** (the two ends of the
-diagonal). MLB geometry sits on a level-oppo ↔ uppercut-pull diagonal. This dropped from 3 when
-MERGE_SEP moved 2.0→1.75 (2026-07-13): the finer cluster pool makes BIC prefer K=2, and the old
-middle "Level Center" no longer earns its own component (every K≥3 also collides two components in
-the "Level Oppo" naming cell). `cards.py` (Layer 2) enriches each with a
+overlay; `cluster.py` still defines shapes with all 5 features. There are 3 archetypes
+(`K_ARCH=3`): **Level Oppo / Level Center / Uppercut Pull**. MLB geometry sits on a level-oppo ↔
+uppercut-pull diagonal. Note `K_ARCH=3` is a deliberate interpretability choice, not the raw BIC
+minimum: after MERGE_SEP moved 2.0→1.75 (2026-07-13) the finer cluster pool makes BIC marginally
+prefer K=2 (13188.8 vs 13222.2), and at K=3 the two level components collide in the same naming
+cell. We keep 3 for the useful middle band and moved the `HAA_OPPO` naming boundary −5.0→−6.5 so
+they name apart (Level Center at haa_pull ≈−5.6 vs Level Oppo ≈−7.6). `cards.py` (Layer 2) enriches each with a
 `context_tag` (top-3 over-indexed situations) to produce `archetype_detailed`, so same-archetype
 shapes read apart. Cluster 0 (the primary swing) is labeled `"Primary"` in `archetype_detailed`,
 while the true archetype stays in `archetype_name`.
