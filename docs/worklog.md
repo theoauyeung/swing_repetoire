@@ -706,3 +706,36 @@
   k/effective_shapes on n_swings). shape_dispersion is exempt (confound check above).
 - Cluster stability check (bootstrap/seed reproducibility of k and centroids).
 - Season-drift check (are multi-season clusters real repertoire vs swing changes over time?).
+
+### Validation section added to `swing+_results.ipynb` (2026-07-14)
+Appended a four-part validation block after the repertoire leaderboard; notebook runs clean
+end-to-end on the `driveline` kernel. All figures/tables save to `results/plots/`.
+- **Year-over-year (per-season agreement).** `xrv`/`realized_rv` vs the `delta_run_exp` anchor,
+  by season. Realized-RV gate holds: corr(realized, actual) ≈ **0.957** every year (2024 .958,
+  2025 .957, **2026 held-out .957** — no train/test gap). Per-swing corr(predicted xRV, actual)
+  ≈ 0.21 (outcome noise dominates a single swing, expected). `xrv_per_season_validation.png`.
+- **Year-over-year (Swing+ reliability).** Batter Swing+ across consecutive seasons (≥200 swings
+  both years): 2024→2025 r=**0.740** (n=340), 2025→2026 r=**0.712** (n=284) → Swing+ is a stable
+  batter skill. `swingplus_yoy_reliability.png`.
+- **Expected vs actual scatter.** Batter-level (≥300 swings): mean predicted xRV vs mean actual
+  `delta_run_exp`, r=**0.373**, OLS slope 0.71, n=565. Aggregating to the batter is the honest
+  view (per-swing is noise-dominated). `xrv_expected_vs_actual.png`.
+- **Feature importance (per model, gain %).** Loaded the three saved boosters from
+  `data/xrv_models/` via `xRV_model.FEATURES`. Each model leans on a different signal:
+  p_bip → `horz_attack_angle_pull` (33%), p_foul → `plate_z_norm` (23%), v_bip → `bat_speed`
+  (29%). `xrv_feature_importance.png`.
+- **Predictive validity vs real hitting outcomes.** `season_stats_hitting` (MLB, R, per
+  batter-season, ≥150 swings & ≥200 PA, n=967). Swing+/mean-xRV corr: OPS **0.37**, wRC+ **0.35**,
+  wOBA **0.35**, WAR 0.22, BA **0.03**. Swing+ tracks damage/OBP-driven value, not batting avg.
+  **`mlb_db` has no OPS+ column** — used `wrc_plus` (park/league-adjusted, 100=avg) as the analog;
+  available cols: `ba, obp, slg, ops, iso, woba, wrc_plus, war` in `season_stats_hitting`.
+  The two corr columns are identical by construction (Swing+ is an affine transform of xRV).
+  `swingplus_predictive_corr.png`.
+
+- **Update (same day):** replaced the predictive-validity *table* with a **faceted scatter**
+  (`swingplus_predictive_scatter.png`) — one panel per outcome (BA, OPS, wRC+, wOBA, WAR), Swing+
+  on x, each with Pearson r + OLS fit. Dropped the redundant `vs mean xRV` column (affine dup of
+  Swing+) and `n (non-null)`. Gotcha: a plotting cell ending in `print()` (not a bare expression)
+  doesn't reliably auto-flush the figure to inline `display_data` under nbconvert — add an explicit
+  `plt.show()`. (The old `swingplus_predictive_corr.png` table is now stale.) Note: the M3
+  expected-vs-actual scatter cell was removed from the notebook by hand during editing.

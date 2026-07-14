@@ -221,6 +221,7 @@ out-of-sample (season-held-out) performance. A hierarchical Bayesian variant (vi
 `pymc-bambi-hierarchical-convergence` skill) is the fallback if we need principled shrinkage
 for sparse contexts.
 
+
 ### Part C: Swing-shape value (the composite grade)
 
 Two layers:
