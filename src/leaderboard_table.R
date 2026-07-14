@@ -196,12 +196,12 @@ cl_sub <- sprintf("Value of a single swing shape (>=%d swings)  &middot;  color 
 
 make_leaderboard(head(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
-                 "**Swing+ by Shape &mdash; Top 25**", cl_sub, cl_foot,
+                 "**Swing+ by Shape**", cl_sub, cl_foot,
                  file.path(PLOTS, "swingplus_by_cluster_gt.png"), width = 900, pct_col = "UsageProp")
 
 make_leaderboard(tail(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
-                 "**Swing+ by Shape &mdash; Bottom 25**", cl_sub, cl_foot,
+                 "**Swing+ by Shape**", cl_sub, cl_foot,
                  file.path(PLOTS, "swingplus_by_cluster_bottom_gt.png"), width = 900, pct_col = "UsageProp")
 
 cat("done\n")
