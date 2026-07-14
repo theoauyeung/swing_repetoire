@@ -788,3 +788,6 @@ and displays the PNGs inline.
 
 - **Update (same day):** dropped the `mean xRV` column from the Swing+ leaderboards (top & bottom);
   they now show #, Batter, Swings, Swing+ only. Removed the now-unused `xrv` read from `sp_pool`.
+
+- **Update (same day):** `TOP_N` 25 -> 10; all six leaderboards (Swing+, Repertoire+, by-shape;
+  top & bottom) now show 10 rows. Color domains still span the full qualified pools.
