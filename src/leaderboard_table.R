@@ -26,7 +26,7 @@ suppressMessages({
 })
 
 TOP_N              <- 10
-MIN_SWINGS         <- 300   # Swing+ leaderboard: >= 300 competitive swings in 2024-25
+MIN_SWINGS         <- 750   # Swing+ leaderboard: >= 300 competitive swings in 2024-25
 MIN_CLUSTER_SWINGS <- 100   # by-shape: >= 100 swings in the (batter, stand, cluster) shape
 PLOTS              <- "results/plots"
 dir.create(PLOTS, showWarnings = FALSE, recursive = TRUE)
