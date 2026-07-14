@@ -145,12 +145,12 @@ sp_sub    <- sprintf("Mean per-swing xRV, 0-100 scale (50 = league-average)  &mi
 
 make_leaderboard(head(sp_pool, TOP_N) |> select(all_of(sp_cols)),
                  "SwingPlus", pal_sp, sp_labels, sp_align,
-                 "**Swing+ Leaderboard &mdash; Top 25**", sp_sub, sp_foot,
+                 "**Swing+ Leaderboard**", sp_sub, sp_foot,
                  file.path(PLOTS, "swingplus_leaderboard_gt.png"), width = 760)
 
 make_leaderboard(tail(sp_pool, TOP_N) |> select(all_of(sp_cols)),
                  "SwingPlus", pal_sp, sp_labels, sp_align,
-                 "**Swing+ Leaderboard &mdash; Bottom 25**", sp_sub, sp_foot,
+                 "**Swing+ Leaderboard**", sp_sub, sp_foot,
                  file.path(PLOTS, "swingplus_bottom_gt.png"), width = 760)
 
 # ── Repertoire+ (unit = batter x stand) ─────────────────────────────────────────
@@ -181,12 +181,12 @@ rep_sub    <- sprintf("Repertoire width: usage-weighted spread of a hitter's swi
 
 make_leaderboard(head(rep_pool, TOP_N) |> select(all_of(rep_cols)),
                  "RepertoirePlus", pal_rep, rep_labels, rep_align,
-                 "**Repertoire+ Leaderboard &mdash; Top 25**", rep_sub, rep_foot,
+                 "**Repertoire+ Leaderboard**", rep_sub, rep_foot,
                  file.path(PLOTS, "repertoire_leaderboard_gt.png"), width = 820)
 
 make_leaderboard(tail(rep_pool, TOP_N) |> select(all_of(rep_cols)),
                  "RepertoirePlus", pal_rep, rep_labels, rep_align,
-                 "**Repertoire+ Leaderboard &mdash; Bottom 25**", rep_sub, rep_foot,
+                 "**Repertoire+ Leaderboard**", rep_sub, rep_foot,
                  file.path(PLOTS, "repertoire_bottom_gt.png"), width = 820)
 
 # ── Swing+ by shape (top / bottom), reusing cl_pool + pal_cl from above ──────────────────────────
