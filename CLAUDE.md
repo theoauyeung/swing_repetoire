@@ -55,6 +55,15 @@ python src/cards.py       # Layer-2 swing ID cards -> shape_cards.parquet + shap
 python src/repertoire.py  # Facet-2 Repertoire+ (repertoire expansiveness) -> repertoire_scores.parquet + repertoire_catalog.md
 ```
 
+**R leaderboards (`src/leaderboard_table.R`):** the presentation-grade Swing+ / Repertoire+
+leaderboards use **R (gt + mlbplotR)** for MLBAM headshots — `batter_id` is the MLBAM id
+`gt_fmt_mlb_headshot()` keys on. Run `Rscript src/leaderboard_table.R` from repo root; it reads
+`data/*.parquet` and writes `results/plots/{swingplus,repertoire}_leaderboard_gt.png`. `swing+_results.ipynb`
+shells out to it and displays the PNGs. R 4.6.0 lives at
+`C:\Users\theo.an-yeung\AppData\Local\Programs\R\R-4.6.0\bin\Rscript.exe` (NOT on PATH); packages
+arrow/dplyr/gt/gtExtras/mlbplotR/scales/webshot2 are installed, and `gtsave()` PNG export needs
+headless Chrome (webshot2), which works in this env.
+
 **Pipeline order:** extract → features → cluster → xrv (built). `interpret.py` (Layer 1 = cross-unit
 archetype lexicon) and `cards.py` (Layer 2 = per-hitter swing ID cards: name-delta-vs-primary,
 over-index when-label, grade + within-batter matched contrast) are the interpretability overlay and

@@ -739,3 +739,49 @@ end-to-end on the `driveline` kernel. All figures/tables save to `results/plots/
   doesn't reliably auto-flush the figure to inline `display_data` under nbconvert — add an explicit
   `plt.show()`. (The old `swingplus_predictive_corr.png` table is now stale.) Note: the M3
   expected-vs-actual scatter cell was removed from the notebook by hand during editing.
+
+### R/gt leaderboards with headshots (2026-07-14)
+Added `src/leaderboard_table.R` — Swing+ and Repertoire+ leaderboards via **gt + mlbplotR**
+(MLBAM headshots, `gt_theme_538`, goldenrod→blue `data_color` gradient on the value column).
+Reads the same `data/*.parquet` and writes `results/plots/{swingplus,repertoire}_leaderboard_gt.png`.
+`batter_id` IS the MLBAM id, which is exactly what `gt_fmt_mlb_headshot()` keys on (headshots load
+for prospects too; missing Swing+ renders as "-" via `sub_missing`). The notebook gained an
+"Aesthetic leaderboards" section that shells out to the script (`subprocess.run(..., check=True)`)
+and displays the PNGs inline.
+- **Env:** R 4.6.0 at `C:\Users\theo.an-yeung\AppData\Local\Programs\R\R-4.6.0\bin\Rscript.exe`
+  (NOT on PATH). Packages present: arrow, dplyr, gt, gtExtras, mlbplotR, scales, webshot2.
+  `gtsave()` PNG export needs headless Chrome via webshot2 — works in this env.
+- **Gotcha:** a quoted bash heredoc (`<<'EOF'`) does NOT expand `$SHELLVAR` inside the R source,
+  so pass paths as R literals / via the working directory, not shell interpolation.
+
+- **Update (same day):** `leaderboard_table.R` reworked. Palette flipped to diverging
+  **blue(low)→white→red(high)** with `data_color` domain **fixed to the full qualified pool**
+  (508 batters / 703 units / 1380 shapes) rather than the shown 25 — so Top 25 reads all-red,
+  Bottom 25 all-blue. Added **Bottom-25** tables for Swing+ and Repertoire+, and **Top+Bottom-25**
+  for **Swing+ by shape** (per-(batter,stand) cluster; headshots repeat per batter by design).
+  Bottom tables keep global ranks via `tail()` on the full desc-sorted pool. Six PNGs total; the
+  notebook cell displays all six. Refactored the six gt tables through one `make_leaderboard()`
+  helper (cols_label via `.list=`, `data_color`/`cols_align` via `all_of()`, `gt_theme_538(quiet=TRUE)`).
+
+- **Update (same day):** by-shape (archetype) tables now show **% of the hitter's (stance) swings
+  in that shape** (usage share) instead of raw swing count — `UsageProp = Swings / sum(Swings)`
+  within each (batter, stand) unit (denominator includes sub-100-swing clusters), rendered via a
+  new optional `pct_col` arg on `make_leaderboard()` (`fmt_percent`). Decluttered `swing+_results.ipynb`:
+  deleted the pandas Swing+/by-cluster/Repertoire+ leaderboard cells, the `cluster_table()` per-hitter
+  drill-down, and their section-title markdowns; the first cell is now setup-only (paths + imports).
+  Notebook flow is setup → R leaderboards (6 gt tables) → validation. Removed the now-orphaned pandas
+  PNGs (swingplus_leaderboard/by_cluster/clusters, repertoire_leaderboard, swingplus_predictive_corr).
+
+- **Update (same day):** rebuilt the per-hitter `cluster_table` drill-down as an **R gt** table.
+  `leaderboard_table.R` now takes an optional name arg (`Rscript src/leaderboard_table.R "Arraez"`):
+  it builds `cl_pool` + `pal_cl` once (shared with the by-shape leaderboards), then in drill mode
+  renders only that batter's shapes (substring match, both stances for switch hitters) ranked by
+  Swing+ and colored on the **league scale** (so a below-average hitter reads pale/blue), writing
+  `shape_drilldown_<slug>_gt.png`, and `quit()`s before the full leaderboard build. Notebook exposes
+  `shape_drilldown("name")` (returns an IPython Image) with an Arraez demo. Same headshot / usage-% /
+  archetype·situation schema as the by-shape leaderboard.
+
+- **Update (same day):** renamed the per-hitter drill-down to **breakdown** (`shape_breakdown()` in
+  the notebook, `shape_breakdown_<slug>_gt.png` output). Title now shows the **actual hitter name**
+  (`paste(unique(d$label))`) instead of the literal search term in quotes, and dropped the em dash
+  ("Swing shapes by value - Luis Arraez"). Removed the orphaned `shape_drilldown_*` PNGs.
