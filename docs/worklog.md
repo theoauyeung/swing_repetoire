@@ -785,3 +785,6 @@ and displays the PNGs inline.
   the notebook, `shape_breakdown_<slug>_gt.png` output). Title now shows the **actual hitter name**
   (`paste(unique(d$label))`) instead of the literal search term in quotes, and dropped the em dash
   ("Swing shapes by value - Luis Arraez"). Removed the orphaned `shape_drilldown_*` PNGs.
+
+- **Update (same day):** dropped the `mean xRV` column from the Swing+ leaderboards (top & bottom);
+  they now show #, Batter, Swings, Swing+ only. Removed the now-unused `xrv` read from `sp_pool`.
