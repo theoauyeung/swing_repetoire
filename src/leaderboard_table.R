@@ -123,12 +123,11 @@ if (!is.na(DRILL)) {
 # ── Swing+ (batter) ─────────────────────────────────────────────────────────────
 
 sp_pool <- read_parquet("data/xrv_swings.parquet",
-                        col_select = c("batter_id", "game_year", "xrv", "xrv_grade")) |>
+                        col_select = c("batter_id", "game_year", "xrv_grade")) |>
   filter(game_year %in% c(2024, 2025)) |>
   group_by(batter_id) |>
   summarise(Swings = n(),
             SwingPlus = round(mean(xrv_grade), 1),
-            meanxRV   = round(mean(xrv), 4),
             .groups = "drop") |>
   filter(Swings >= MIN_SWINGS) |>
   left_join(names_df, by = "batter_id") |>
@@ -137,9 +136,9 @@ sp_pool <- read_parquet("data/xrv_swings.parquet",
 
 pal_sp <- col_numeric(PAL_COLS, domain = range(sp_pool$SwingPlus))
 sp_labels <- list(Rank = "#", batter_id = "", batter_full_name = "Batter",
-                  Swings = "Swings", SwingPlus = "Swing+", meanxRV = "mean xRV")
-sp_align  <- c("Rank", "Swings", "SwingPlus", "meanxRV")
-sp_cols   <- c("Rank", "batter_id", "batter_full_name", "Swings", "SwingPlus", "meanxRV")
+                  Swings = "Swings", SwingPlus = "Swing+")
+sp_align  <- c("Rank", "Swings", "SwingPlus")
+sp_cols   <- c("Rank", "batter_id", "batter_full_name", "Swings", "SwingPlus")
 sp_foot   <- "Swing+ = batter mean of xrv_grade (per-swing xRV z-scored, 50 + 10z, clipped 0-100)."
 sp_sub    <- sprintf("Mean per-swing xRV, 0-100 scale (50 = league-average)  &middot;  &ge;%d swings  &middot;  color spans all %d qualified batters",
                      MIN_SWINGS, nrow(sp_pool))
