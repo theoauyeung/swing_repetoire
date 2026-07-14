@@ -11,7 +11,7 @@
 #
 # batter_id is the MLBAM id, which is what mlbplotR keys headshots on.
 # Coloring: diverging blue(low) -> white -> red(high), with the domain fixed to the FULL qualified
-# pool for each metric (not just the shown rows), so the Top 25 reads all-red and the Bottom 25
+# pool for each metric (not just the shown rows), so the Top N reads all-red and the Bottom N
 # all-blue -- and a drill-down's shapes sit on the same league scale.
 # Writes results/plots/{swingplus,repertoire}_leaderboard_gt.png + *_bottom_gt.png + by-cluster pair,
 # or shape_breakdown_<name>_gt.png in drill mode.
@@ -25,7 +25,7 @@ suppressMessages({
   library(scales)
 })
 
-TOP_N              <- 25
+TOP_N              <- 10
 MIN_SWINGS         <- 300   # Swing+ leaderboard: >= 300 competitive swings in 2024-25
 MIN_CLUSTER_SWINGS <- 100   # by-shape: >= 100 swings in the (batter, stand, cluster) shape
 PLOTS              <- "results/plots"
