@@ -249,24 +249,34 @@ scalars that don't require shared cluster IDs:**
 - **Usage entropy / effective shapes:** Shannon entropy of mixture weights → "effective
   number of shapes actually used" (a hitter with k=5 but 95% in one cluster is effectively
   monolithic).
-- **Repertoire+ (repertoire expansiveness):** a purely descriptive, cross-hitter-comparable
-  measure of how *wide* a repertoire is: the usage-weighted mean pairwise Euclidean distance
-  between a unit's cluster centroids, with each of the 5 shape features standardized by the
-  **cohort (league) swing-level SD** so mph and degrees are commensurable. Scaled Repertoire+ =
+- **Repertoire+ (repertoire expansiveness):** a purely descriptive, cross-hitter-comparable,
+  **count-aware** measure of how *wide* a repertoire is: `expansiveness = mean_pairwise_dist ×
+  √effective_shapes`, where `mean_pairwise_dist` is the usage-weighted mean pairwise Euclidean
+  distance between a unit's cluster centroids (each of the 5 shape features standardized by the
+  **cohort (league) swing-level SD** so mph and degrees are commensurable) and `effective_shapes =
+  1/Σweight²` (inverse-Simpson, the usage-effective shape count; k=1 → 1). Scaled Repertoire+ =
   `50 + 10·z` clipped to [0, 100] (same 0-100 / 50-average scale as Swing+); report
-  `repertoire_pctile` as the headline, since 13% of units are single-shape and pile up at the
-  0-spread floor, which skews the "50 = average" reference (the percentile is robust to it).
+  `repertoire_pctile` as the headline, since ~24% of units are single-shape and pile up at the
+  0 floor, which skews the "50 = average" reference (the percentile is robust to it).
   Built in `src/repertoire.py` → `repertoire_scores.parquet` + `repertoire_catalog.md`. It uses
   the **league frame** (standardize by cohort swing-level SD) precisely so the spread is rankable
   across hitters. Design decisions (confirmed): **geometry only, no run value, quality, or
   adjustability**, so a wide and a narrow repertoire are graded purely on spread; **all 5 features
   equal-weighted** (incl. `bat_speed`, which the archetype lexicon excludes but is wanted here);
-  **usage-weighted** (a rarely-used shape barely widens the repertoire); and **mean** (not max)
-  pairwise distance. The `horz_attack_angle` pull-mirror is a uniform negation and distances use
+  and **usage-weighted** (a rarely-used shape barely widens the repertoire, on both the distance
+  and the effective-count factor). **Superseded decision (2026-07-16):** the metric was originally
+  *mean* pairwise distance only, but that is count-blind (it measures the average dissimilarity of
+  two random swings, so 2 extreme shapes outranked 6 moderate ones — corr with `k` ≈ −0.12). The
+  `× effective_shapes` factor (eff¹) reward count too, but overshot — count then drove ~84% of the
+  ranking (corr with `k` ≈ +0.82) and shape-count groups barely overlapped — so the count term is
+  damped to **√effective_shapes** (eff^0.5): spread and count each drive ~half the ranking (corr
+  with `k` ≈ +0.59; spread ≈ count ≈ 0.66), and a genuinely wide 2-shape repertoire can still
+  out-rank a mediocre 5-shape one. Chosen over MST branch length (pure geometry, drops usage
+  weighting) and Rao's Q (count reward saturates by k≈4). The `horz_attack_angle` pull-mirror is a uniform negation and distances use
   differences, so the mirror leaves every distance unchanged and `cluster_summary`'s raw centroids
-  give the identical result. Caveat: width is driven mostly by `swing_length` plus the two attack
-  angles, and `horz_attack_angle` is the most pitch-reactive feature (ICC 0.054), so a horz-driven
-  wide repertoire partly reflects pitch-location variety, not genuine swing change.
+  give the identical result. Caveat: the spread factor is driven mostly by `swing_length` plus the
+  two attack angles, and `horz_attack_angle` is the most pitch-reactive feature (ICC 0.054), so a
+  horz-driven wide repertoire partly reflects pitch-location variety, not genuine swing change.
 
 **Adjustability** is distinct from raw diversity and is the crux: diversity is only valuable
 if shapes are deployed *appropriately*. Operationalize as:

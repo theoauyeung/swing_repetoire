@@ -176,7 +176,7 @@ rep_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = 
 rep_align  <- c("Rank", "batter_stand", "k", "RepertoirePlus", "SwingPlus")
 rep_cols   <- c("Rank", "batter_id", "label", "batter_stand", "k", "RepertoirePlus", "SwingPlus")
 rep_foot   <- "Repertoire+ is geometry only (no value). Swing+ is the unit's mean swing quality - an independent axis."
-rep_sub    <- sprintf("Repertoire width: usage-weighted spread of a hitter's swing shapes (50 = league-average)  &middot;  color spans all %d units",
+rep_sub    <- sprintf("Repertoire width: usage-weighted shape spread × effective # of shapes (50 = league-average)  &middot;  color spans all %d units",
                       nrow(rep_pool))
 
 make_leaderboard(head(rep_pool, TOP_N) |> select(all_of(rep_cols)),

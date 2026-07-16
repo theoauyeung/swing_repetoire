@@ -791,3 +791,30 @@ and displays the PNGs inline.
 
 - **Update (same day):** `TOP_N` 25 -> 10; all six leaderboards (Swing+, Repertoire+, by-shape;
   top & bottom) now show 10 rows. Color domains still span the full qualified pools.
+
+### Repertoire+ made count-aware (2026-07-16)
+Reworked the Repertoire+ metric in `repertoire.py`. The old metric (usage-weighted **mean**
+pairwise centroid distance) is count-blind — it measures average dissimilarity of two random
+swings, so hitters with 2 extreme shapes outranked ones with 6 moderate shapes (corr with `k` was
+**−0.12**; every top-25 unit had k=2). New:
+`expansiveness = mean_pairwise_dist × effective_shapes`, where `effective_shapes = 1/Σweight²`
+(inverse-Simpson, usage-effective shape count). Now corr with `k` ≈ **+0.82**; top-10 is
+Arraez (6), Raleigh, Rafaela, Busch, Ohtani, Wood, Yelich (k=4–6) — genuinely deep repertoires.
+- **Why this form:** prototyped 3 count-aware candidates against the real 703-unit data.
+  `mean_dist × effective_shapes` chosen (usage-aware, decomposable into "how different" × "how
+  many effectively", a 99/1 hitter's rare shape barely counts) over **MST branch length** (r=0.94
+  but pure geometry, drops usage) and **Rao's Q** (weighted sum; r=0.67, count reward saturates).
+  User picked this option.
+- `repertoire_scores.parquet` gains diagnostic cols `mean_pairwise_dist` and `effective_shapes`;
+  `expansiveness` is now the product. Renamed the helper `expansiveness()` → `mean_pairwise_dist()`.
+  k=1 → 0 floor unchanged. Regenerated the parquet, catalog, and the R Repertoire+ leaderboards.
+- Updated the "confirmed decision" note in research-design.md (was "**mean** (not max) pairwise
+  distance") and the CLAUDE.md Repertoire+ paragraph.
+
+- **Update (same day):** tempered the count term after checking reliance — `× effective_shapes`
+  (eff¹) overshot: count drove **84%** of the ranking variance (corr with `k` +0.82) and shape-count
+  groups barely overlapped (a wide k=2 couldn't beat almost any k=4+). Changed to
+  `expansiveness = mean_pairwise_dist × √effective_shapes` (eff^0.5). Now balanced: corr with `k`
+  +0.59, spread-corr 0.66 ≈ count-corr 0.65, log-variance split ~61% spread / 50% count, and
+  k-groups overlap (Johnathan Rodríguez k=2 re-enters the top 10; Oneil Cruz k=4 is #2; Arraez k=6
+  no longer auto-#1). Exponent is the single tunable knob if more/less count weight is ever wanted.

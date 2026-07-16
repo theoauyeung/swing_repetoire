@@ -72,16 +72,25 @@ repertoire expansiveness = **Repertoire+**) consumes cluster_summary + swings_mo
 built Facet-2 stage; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage
 is a standalone script with a `main()`; there is no test suite or build step yet.
 
-**Repertoire+ (`repertoire.py`):** a purely descriptive measure of repertoire *width*. It's the
-usage-weighted mean pairwise Euclidean distance between a unit's cluster centroids, with each of the
-5 shape features standardized by **cohort (league) swing-level SD** so it's cross-hitter comparable
-(rankable). Geometry only: no run value, quality, or adjustability. All 5 features are
-equal-weighted (incl. bat_speed). Lead with `repertoire_pctile`, not `repertoire_plus`, because 13%
-of units are single-shape and pile up at a 0-spread floor that skews the "50 = average" reference.
-`repertoire_plus` is on the **same scale as Swing+**: `50 + 10·z` clipped to [0, 100], where 50 is
-league-average width. That replaced the OPS+-style `100 + 10·z` it used originally. It reuses
-cluster_summary's raw centroids directly, since the horz_attack_angle pull-mirror is
-distance-invariant.
+**Repertoire+ (`repertoire.py`):** a purely descriptive, **count-aware** measure of repertoire
+*width*. `expansiveness = mean_pairwise_dist × √effective_shapes`, where `mean_pairwise_dist` is the
+usage-weighted mean pairwise Euclidean distance between a unit's cluster centroids (each of the 5
+shape features standardized by **cohort (league) swing-level SD** so it's cross-hitter comparable)
+and `effective_shapes = 1/Σweight²` (inverse-Simpson, the usage-effective shape count). Reworked
+2026-07-16 in two steps: mean pairwise distance **alone is count-blind** (it's the average
+dissimilarity of two random swings), so it ranked 2-extreme-shape hitters above 6-moderate-shape
+ones (corr with `k` ≈ **−0.12**). Multiplying by `effective_shapes` (eff¹) overshot the other way —
+count then drove **84%** of the ranking (corr with `k` ≈ +0.82) and shape-count groups barely
+overlapped. The **√** on the count term (eff^0.5) balances them: spread and count each contribute
+~half the ranking variance (corr with `k` ≈ **+0.59**; corr with spread ≈ corr with eff ≈ 0.66), so
+a genuinely wide 2-shape repertoire can still out-rank a mediocre 5-shape one. Chosen over
+MST-length (pure geometry, drops usage) and Rao's Q (count reward saturates). Still geometry only:
+no run value, quality, or adjustability; all 5 features equal-weighted (incl. bat_speed); k=1 → 0
+floor. Lead with `repertoire_pctile`, not `repertoire_plus`, because 24% of units are single-shape
+and pile up at the 0 floor that skews the "50 = average" reference. `repertoire_plus` is on the
+**same scale as Swing+**: `50 + 10·z` clipped to [0, 100]. Diagnostic columns `mean_pairwise_dist`
+and `effective_shapes` are retained in `repertoire_scores.parquet`. It reuses cluster_summary's raw
+centroids directly, since the horz_attack_angle pull-mirror is distance-invariant.
 
 **Archetype lexicon (`interpret.py`):** archetypes are defined on the **4 geometry features only**
 (tilt, length, VAA, HAA_pull). `bat_speed` is a reported descriptor, not a defining axis, because

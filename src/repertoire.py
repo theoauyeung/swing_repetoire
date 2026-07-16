@@ -5,10 +5,19 @@ whether the shapes are good, valuable, or well-deployed — a wide repertoire an
 graded purely on spread.
 
 
-Definition (per (batter, stand) unit):
+Definition (per (batter, stand) unit) — a count-aware functional-diversity measure:
   - standardize each of the 5 shape features by the cohort swing-level SD,
-  - expansiveness = USAGE-WEIGHTED MEAN pairwise Euclidean distance between the unit's cluster
-    centroids in that league-z space (pair weight = weight_i * weight_j); k=1 => 0,
+  - mean_pairwise_dist = USAGE-WEIGHTED MEAN pairwise Euclidean distance between the unit's
+    cluster centroids in that league-z space (pair weight = weight_i * weight_j),
+  - effective_shapes = 1 / sum(weight_i^2)  (inverse-Simpson: the usage-EFFECTIVE number of
+    shapes, so a rarely-used emergency shape barely counts; k even-weight => effective ~ k),
+  - expansiveness = mean_pairwise_dist * sqrt(effective_shapes)  — rewards BOTH how different the
+    shapes are AND how many (effective) shapes a hitter carries; k=1 => 0. (Mean pairwise
+    distance alone is count-blind — it's the average dissimilarity of two random swings, so a
+    hitter with 2 extreme shapes beat one with 6 moderate ones. But `* effective_shapes` overshot
+    the other way — count then drove ~84% of the ranking and shape-count groups barely overlapped.
+    The `sqrt` tempers the count term so spread and count contribute ~equally: a genuinely wide
+    2-shape repertoire can still out-rank a mediocre 5-shape one.)
   - Repertoire+ = 50 + 10 * z(expansiveness), clipped to [0, 100] (50 = league-average width;
     same scale as Swing+), plus a 0-100 percentile.
   - per-feature spread breakdown: usage-weighted mean pairwise |centroid gap| for each feature,
@@ -37,9 +46,10 @@ UNITS = {"swing_path_tilt": "deg", "swing_length": "ft", "bat_speed": "mph",
 KEY = ["batter_id", "batter_stand"]
 
 
-def expansiveness(centroids, weights, sd):
-    """Usage-weighted mean pairwise Euclidean distance between a unit's cluster centroids, with
-    each feature standardized by the cohort swing-level SD"""
+def mean_pairwise_dist(centroids, weights, sd):
+    """Usage-weighted mean pairwise Euclidean distance between a unit's cluster centroids (each
+    feature standardized by the cohort swing-level SD), plus the per-feature mean pairwise gap in
+    raw units. This is the count-BLIND spread term; main() multiplies it by effective_shapes."""
     k = len(centroids)
     per_feat = np.zeros(len(sd))
     if k < 2:
@@ -69,10 +79,15 @@ def main():
         g = g.sort_values("cluster")
         centroids = g[cen_cols].to_numpy(float)
         weights = g["weight"].to_numpy(float)
-        exp, per_feat = expansiveness(centroids, weights, sd)
+        mpd, per_feat = mean_pairwise_dist(centroids, weights, sd)
+        eff = 1.0 / float(np.square(weights).sum())   # effective # shapes (inverse-Simpson); k=1 -> 1
+        width = mpd * np.sqrt(eff)                     # count-aware width; sqrt tempers the count term
+                                                      # so spread & count drive the ranking ~equally
+                                                      # (eff^1 made count 84% of it); k=1 -> 0 (mpd=0)
         row = {"batter_id": bid, "batter_stand": stand,
-               "label": g["label"].iloc[0], "k": len(g),
-               "n_swings": int(g["n"].sum()), "expansiveness": round(exp, 4)}
+               "label": g["label"].iloc[0], "k": len(g), "effective_shapes": round(eff, 2),
+               "n_swings": int(g["n"].sum()), "mean_pairwise_dist": round(mpd, 4),
+               "expansiveness": round(width, 4)}
         row.update({f"spread_{c}": round(v, 2) for c, v in zip(FEATURES, per_feat)})
         rows.append(row)
 
@@ -91,19 +106,23 @@ def write_catalog(a, sd):
     spread_cols = [f"spread_{c}" for c in FEATURES]
     L, w = [], None
     out = L.append
-    out("# Swing Repertoire+ catalog — repertoire expansiveness (geometry only)\n")
-    out("Repertoire+ measures how SPREAD OUT a hitter's swing-shape clusters are in the 5-feature "
-        "shape space (bat speed + the four angle/length features), standardized by cohort "
-        "swing-level SD so it is comparable across hitters. **It is purely descriptive — it "
-        "says nothing about whether the shapes are good or valuable.** k=1 (single-shape) "
-        "hitters score the floor (0 spread).\n")
+    out("# Swing Repertoire+ catalog — count-aware repertoire width (geometry only)\n")
+    out("Repertoire+ = **usage-weighted mean pairwise centroid distance × √(effective number of "
+        "shapes)** (`1/Σweight²`, inverse-Simpson), in the 5-feature shape space (bat speed + the "
+        "four angle/length features) standardized by cohort swing-level SD so it is comparable "
+        "across hitters. It rewards BOTH how different a hitter's shapes are AND how many "
+        "(effective) shapes they carry — a 6-shape hitter is functionally wider than a 2-shape one "
+        "even when the 2 are far apart — but the **√** on the count term keeps the two balanced "
+        "(each drives ~half the ranking), so a genuinely wide 2-shape hitter can still out-rank a "
+        "mediocre 5-shape one. **It is purely descriptive — it says nothing about whether "
+        "the shapes are good or valuable.** k=1 (single-shape) hitters score the floor (0).\n")
     out(f"- Cohort: **{len(a)} (batter, stand) units**")
     out(f"- **Lead with `repertoire_pctile` (0-100 rank).** {int((a.k == 1).sum())} single-shape "
         f"units (24%) pile up at the 0-spread floor, dragging the Repertoire+ mean below the "
         f"multi-shape median, so `repertoire_plus`'s '50 = average' is skewed by that mass. The "
         f"percentile is robust to it; Repertoire+ is a monotone transform of the same ranking. "
         f"Repertoire+ uses the same 0-100 / 50-average scale as Swing+ (50 + 10·z, clipped).")
-    out(f"- Usage-weighted mean pairwise centroid distance (league-SD units) — "
+    out(f"- Expansiveness (mean pairwise dist × √effective shapes) — "
         f"mean {a.expansiveness.mean():.2f}, median {a.expansiveness.median():.2f}, "
         f"max {a.expansiveness.max():.2f}")
     out("- **What drives the width:** `swing_length` + the two attack angles dominate; "
@@ -115,7 +134,8 @@ def write_catalog(a, sd):
     out(pd.DataFrame({"feature": FEATURES, "cohort_SD": sd.round(3),
                       "unit": [UNITS[f] for f in FEATURES]}).to_markdown(index=False) + "\n")
 
-    show = ["label", "n_swings", "k", "repertoire_pctile", "repertoire_plus", "expansiveness"] + spread_cols
+    show = ["label", "n_swings", "k", "effective_shapes", "repertoire_pctile", "repertoire_plus",
+            "expansiveness", "mean_pairwise_dist"] + spread_cols
     out("## Widest repertoires (most expansive repertoires)")
     out(a.head(15)[show].to_markdown(index=False) + "\n")
 
