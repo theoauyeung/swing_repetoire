@@ -53,6 +53,7 @@ python src/xRV_model.py   # bespoke per-swing xRV -> xrv_swings.parquet (+ xrv_g
 python src/interpret.py   # Layer-1 archetype lexicon -> shape_archetypes + archetype_lexicon.md
 python src/cards.py       # Layer-2 swing ID cards -> shape_cards.parquet + shape_cards_catalog.md
 python src/repertoire.py  # Facet-2 Repertoire+ (repertoire expansiveness) -> repertoire_scores.parquet + repertoire_catalog.md
+python src/context_response.py  # Facet-2 adjustability (context-responsiveness) -> context_response.parquet + context_response_catalog.md
 ```
 
 **R leaderboards (`src/leaderboard_table.R`):** the presentation-grade Swing+ / Repertoire+
@@ -68,9 +69,10 @@ headless Chrome (webshot2), which works in this env.
 archetype lexicon) and `cards.py` (Layer 2 = per-hitter swing ID cards: name-delta-vs-primary,
 over-index when-label, grade + within-batter matched contrast) are the interpretability overlay and
 consume cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py` (Facet-2
-repertoire expansiveness = **Repertoire+**) consumes cluster_summary + swings_model and is the first
-built Facet-2 stage; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage
-is a standalone script with a `main()`; there is no test suite or build step yet.
+repertoire expansiveness = **Repertoire+**) and `context_response.py` (Facet-2 adjustability =
+**context-responsiveness**) are the two built Facet-2 stages; `value_model → within_batter →
+diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; there is no
+test suite or build step yet.
 
 **Repertoire+ (`repertoire.py`):** a purely descriptive, **count-aware** measure of repertoire
 *width*. `expansiveness = mean_pairwise_dist × √effective_shapes`, where `mean_pairwise_dist` is the
@@ -90,7 +92,29 @@ floor. Lead with `repertoire_pctile`, not `repertoire_plus`, because 24% of unit
 and pile up at the 0 floor that skews the "50 = average" reference. `repertoire_plus` is on the
 **same scale as Swing+**: `50 + 10·z` clipped to [0, 100]. Diagnostic columns `mean_pairwise_dist`
 and `effective_shapes` are retained in `repertoire_scores.parquet`. It reuses cluster_summary's raw
-centroids directly, since the horz_attack_angle pull-mirror is distance-invariant.
+centroids directly, since the horz_attack_angle pull-mirror is distance-invariant. **Pegged to a
+frozen 2024-25 baseline (2026-07-16):** the feature SDs, the `50+10·z` mean/SD, and the percentile
+grid are computed once from the 2024-25 cohort and persisted to `src/repertoire_reference.json`
+(committed; league aggregates only, no PII), then reused every later run so repertoire_plus/pctile
+stay comparable as seasons are added (OPS+/wRC+-style fixed baseline). Delete that JSON to re-peg.
+Caveat: `cluster_summary` centroids are still pooled across all clustered seasons, so a true
+*per-season* cross-season plot also needs per-season centroids (unbuilt) — the peg removes scale
+drift, not centroid pooling.
+
+**Context-responsiveness (`context_response.py`) = adjustability:** how much a hitter's shape choice
+depends on pre-swing context — the paper's actual adjustability metric, **distinct from Repertoire+
+width** (a hitter can be wide-but-random or narrow-but-adjustable). Per (batter, stand) unit, 2024-25,
+≥300 swings & k≥2 (512 units). Two estimators: (1) headline `responsiveness` = null-adjusted
+normalized MI `U=(I(C;S)−null)/H(S)` over joint context (count × pitch-group × location) — permutation
+null (B=200) de-biases sparse MI, ÷H(S) strips repertoire entropy so it isn't just entropy; (2)
+`resp_clf` = classifier-skill cross-check (OOF log-loss lift of a multinomial logit over the usage
+prior). They agree (r≈0.45) and it's NOT repertoire size (corr with k ≈ −0.35). Reported per axis
+(`resp_count`/`resp_pitch`/`resp_loc`) to split volitional adjustment from forced geometry.
+**Known contamination (2026-07-16):** dependence is almost all **location** (resp_loc≈0.22) with
+**near-zero count-responsiveness** (resp_count≈0.006) — at-contact shape is largely set by where the
+pitch is (forced geometry; horz_attack_angle is the most pitch-reactive shape feature), not
+volitional in-count change. Treat the raw headline cautiously as "adjustability"; the payoff test
+should lean on `resp_count` or a location-decontaminated variant. See research-design.md Part D.
 
 **Archetype lexicon (`interpret.py`):** archetypes are defined on the **4 geometry features only**
 (tilt, length, VAA, HAA_pull). `bat_speed` is a reported descriptor, not a defining axis, because
