@@ -32,11 +32,20 @@ Outputs:
 Run:  python src/repertoire.py
 """
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+
+# Frozen reference so the metric is comparable ACROSS seasons (pegged to 2024-25, like OPS+/wRC+
+# peg to a fixed league baseline). First run builds it from the 2024-25 swings/cohort and commits
+# it here; every later run (2026+ added) reuses these constants instead of re-baselining. Delete
+# the file to re-peg. It holds only league-level aggregates (SDs, mean/SD, a percentile grid) — no
+# athlete PII — so unlike data/ it lives in-repo and is committed.
+REF_PATH = ROOT / "src" / "repertoire_reference.json"
+REF_SEASONS = [2024, 2025]
 
 # 5 shape features. cluster_summary stores centroids as `{col}_mean`; swings_model has the raw
 FEATURES = ["swing_path_tilt", "swing_length", "bat_speed",
@@ -65,15 +74,8 @@ def mean_pairwise_dist(centroids, weights, sd):
     return (num / den, per_feat / den) if den > 0 else (0.0, per_feat)
 
 
-def main():
-    summary = pd.read_parquet(DATA / "cluster_summary.parquet")
-    swings = pd.read_parquet(DATA / "swings_model.parquet", columns=FEATURES)
-    sd = swings[FEATURES].std().to_numpy(float)
-    print("Cohort swing-level SD per feature:")
-    for f, s in zip(FEATURES, sd):
-        print(f"  {f:22s} {s:6.3f} {UNITS[f]}")
-
-    cen_cols = [f"{c}_mean" for c in FEATURES]
+def compute_units(summary, cen_cols, sd):
+    """One row per (batter, stand): expansiveness (count-aware width) + per-feature raw spreads."""
     rows = []
     for (bid, stand), g in summary.groupby(KEY, sort=False):
         g = g.sort_values("cluster")
@@ -90,11 +92,57 @@ def main():
                "expansiveness": round(width, 4)}
         row.update({f"spread_{c}": round(v, 2) for c, v in zip(FEATURES, per_feat)})
         rows.append(row)
+    return pd.DataFrame(rows)
 
-    repertoire = pd.DataFrame(rows)
-    z = (repertoire["expansiveness"] - repertoire["expansiveness"].mean()) / repertoire["expansiveness"].std()
+
+def resolve_reference(summary, cen_cols, swings):
+    """Return (sd, ref) using the frozen 2024-25 baseline. Builds + commits it on first run.
+
+    Pegging the SCALE (feature SDs + the z mean/SD + the percentile grid) to a fixed 2024-25 baseline
+    is what makes repertoire_plus / repertoire_pctile comparable across seasons — without it, "50 =
+    average" and the percentile silently re-reference every time the cohort changes. (Caveat: the
+    cluster centroids feeding expansiveness are still pooled over whatever seasons are clustered, so
+    a true per-season cross-season plot also needs per-season centroids — separate future work; this
+    step removes the scale drift, not the centroid pooling.)"""
+    if REF_PATH.exists():
+        ref = json.loads(REF_PATH.read_text(encoding="utf-8"))
+        sd = np.array([ref["feature_sd"][f] for f in FEATURES], float)
+        return sd, ref
+
+    ref_swings = swings[swings["game_year"].isin(REF_SEASONS)]
+    sd = ref_swings[FEATURES].std().to_numpy(float)
+    exp = compute_units(summary, cen_cols, sd)["expansiveness"]
+    ref = {"reference_seasons": REF_SEASONS,
+           "n_reference_units": int(len(exp)),
+           "feature_sd": {f: float(s) for f, s in zip(FEATURES, sd)},
+           "expansiveness_mean": float(exp.mean()),
+           "expansiveness_std": float(exp.std()),
+           "expansiveness_sorted": [round(float(v), 4) for v in sorted(exp)]}
+    REF_PATH.write_text(json.dumps(ref, indent=2), encoding="utf-8")
+    print(f"Built + froze repertoire reference -> {REF_PATH} (seasons {REF_SEASONS}, {len(exp)} units)")
+    return sd, ref
+
+
+def main():
+    summary = pd.read_parquet(DATA / "cluster_summary.parquet")
+    swings = pd.read_parquet(DATA / "swings_model.parquet", columns=FEATURES + ["game_year"])
+    cen_cols = [f"{c}_mean" for c in FEATURES]
+    sd, ref = resolve_reference(summary, cen_cols, swings)
+    print(f"Frozen 2024-25 reference: SD per feature + expansiveness mean {ref['expansiveness_mean']:.3f} "
+          f"/ SD {ref['expansiveness_std']:.3f} over {ref['n_reference_units']} units")
+    for f, s in zip(FEATURES, sd):
+        print(f"  {f:22s} {s:6.3f} {UNITS[f]}")
+
+    repertoire = compute_units(summary, cen_cols, sd)
+    # Scale + rank against the FROZEN 2024-25 reference (not the current cohort), so both are
+    # season-stable. repertoire_plus: 50 + 10·z on the frozen mean/SD. pctile: position in the
+    # frozen expansiveness distribution.
+    z = (repertoire["expansiveness"] - ref["expansiveness_mean"]) / ref["expansiveness_std"]
     repertoire["repertoire_plus"] = (50 + 10 * z).clip(0, 100).round(1)
-    repertoire["repertoire_pctile"] = (repertoire["expansiveness"].rank(pct=True) * 100).round(1)
+    ref_sorted = np.array(ref["expansiveness_sorted"], float)
+    repertoire["repertoire_pctile"] = (
+        np.searchsorted(ref_sorted, repertoire["expansiveness"].to_numpy(), side="right")
+        / len(ref_sorted) * 100).round(1)
 
     repertoire = repertoire.sort_values("repertoire_plus", ascending=False).reset_index(drop=True)
     repertoire.to_parquet(DATA / "repertoire_scores.parquet", index=False)
@@ -115,7 +163,10 @@ def write_catalog(a, sd):
         "even when the 2 are far apart — but the **√** on the count term keeps the two balanced "
         "(each drives ~half the ranking), so a genuinely wide 2-shape hitter can still out-rank a "
         "mediocre 5-shape one. **It is purely descriptive — it says nothing about whether "
-        "the shapes are good or valuable.** k=1 (single-shape) hitters score the floor (0).\n")
+        "the shapes are good or valuable.** k=1 (single-shape) hitters score the floor (0). The "
+        "scale (feature SDs + the `50+10·z` constants + the percentile grid) is **pegged to the "
+        "2024-25 baseline** (`src/repertoire_reference.json`) so repertoire_plus / pctile stay "
+        "comparable when later seasons are added.\n")
     out(f"- Cohort: **{len(a)} (batter, stand) units**")
     out(f"- **Lead with `repertoire_pctile` (0-100 rank).** {int((a.k == 1).sum())} single-shape "
         f"units (24%) pile up at the 0-spread floor, dragging the Repertoire+ mean below the "

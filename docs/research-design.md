@@ -258,6 +258,13 @@ scalars that don't require shared cluster IDs:**
   `50 + 10·z` clipped to [0, 100] (same 0-100 / 50-average scale as Swing+); report
   `repertoire_pctile` as the headline, since ~24% of units are single-shape and pile up at the
   0 floor, which skews the "50 = average" reference (the percentile is robust to it).
+  **Pegged to a frozen 2024-25 baseline (2026-07-16):** the feature SDs, the `50+10·z` mean/SD, and
+  the percentile grid are computed once from the 2024-25 cohort and persisted to
+  `src/repertoire_reference.json` (committed; league aggregates only), then reused on every later run
+  so repertoire_plus / pctile stay comparable as seasons are added (like OPS+/wRC+ peg to a fixed
+  league baseline). Delete that file to re-peg. Caveat: `cluster_summary` centroids are still pooled
+  over all clustered seasons, so a true *per-season* cross-season plot also needs per-season
+  centroids (unbuilt) — the peg removes scale drift, not centroid pooling.
   Built in `src/repertoire.py` → `repertoire_scores.parquet` + `repertoire_catalog.md`. It uses
   the **league frame** (standardize by cohort swing-level SD) precisely so the spread is rankable
   across hitters. Design decisions (confirmed): **geometry only, no run value, quality, or

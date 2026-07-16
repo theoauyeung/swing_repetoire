@@ -818,3 +818,17 @@ Arraez (6), Raleigh, Rafaela, Busch, Ohtani, Wood, Yelich (k=4–6) — genuinel
   +0.59, spread-corr 0.66 ≈ count-corr 0.65, log-variance split ~61% spread / 50% count, and
   k-groups overlap (Johnathan Rodríguez k=2 re-enters the top 10; Oneil Cruz k=4 is #2; Arraez k=6
   no longer auto-#1). Exponent is the single tunable knob if more/less count weight is ever wanted.
+
+### Repertoire+ pegged to a frozen 2024-25 baseline (2026-07-16)
+`repertoire.py` now computes the standardization + scaling reference **once** from the 2024-25
+cohort and persists it to `src/repertoire_reference.json` (committed; feature SDs, expansiveness
+mean/SD, and the full percentile grid — league aggregates only, no PII). Later runs load and reuse
+it instead of re-baselining, so `repertoire_plus` / `repertoire_pctile` stay comparable when 2026+
+is added (OPS+/wRC+-style fixed baseline). `repertoire_plus` = `50 + 10·z` on the frozen mean/SD;
+`repertoire_pctile` = position in the frozen expansiveness distribution (`np.searchsorted`).
+Refactored the per-unit loop into `compute_units()`; added `resolve_reference()`. Delete the JSON to
+re-peg. Numerically a no-op right now (24-25 SDs ≈ pooled SDs; top units unchanged — Raleigh 68.9,
+Cruz 68.2, Wood 67.6). **Known gap:** `cluster_summary` centroids are pooled across all clustered
+seasons, so a genuine per-season cross-season visual still needs per-season centroids (unbuilt) —
+the peg fixes scale drift only. Kept this out of CLAUDE.md per user preference (docs/ is the home
+for methodology detail).
