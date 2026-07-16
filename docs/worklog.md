@@ -832,3 +832,22 @@ Cruz 68.2, Wood 67.6). **Known gap:** `cluster_summary` centroids are pooled acr
 seasons, so a genuine per-season cross-season visual still needs per-season centroids (unbuilt) —
 the peg fixes scale drift only. Kept this out of CLAUDE.md per user preference (docs/ is the home
 for methodology detail).
+
+### Context-responsiveness (adjustability) metric built (2026-07-16)
+New Facet-2 stage `src/context_response.py` → `data/context_response.parquet` +
+`context_response_catalog.md` (gitignored data). Per (batter, stand) unit, 2024-25, ≥300 swings &
+k≥2 (512 units): how much shape choice depends on pre-swing context — the paper's adjustability
+metric, distinct from Repertoire+ width. Two estimators (both, per user): (1) null-adjusted
+normalized MI / uncertainty coefficient `U=(I(C;S)-null)/H(S)` over joint + per-axis context
+(count / pitch-group / location), permutation null (B=200) for bias, ÷H(S) to strip repertoire
+entropy; (2) classifier skill (OOF log-loss lift of a multinomial logit over the usage prior) as a
+cross-check. Headline `responsiveness` = null-adj overall U.
+- **Validation:** two estimators agree (r≈0.45); corr with k ≈ −0.35 (NOT repertoire size — the
+  normalization works); corr with n_swings ≈ −0.16.
+- **Key finding:** dependence is almost entirely **location** (resp_loc ≈0.22, resp_pitch ≈0.17)
+  with **near-zero count-responsiveness** (resp_count ≈0.006). At-contact shape is largely *forced*
+  by pitch location, not volitional in-count adjustment — contamination guardrail + Limitation #1
+  (contact-point-only geometry) in the data. Payoff test should lean on resp_count / a
+  location-excluded variant; be cautious calling the raw headline "adjustability." Documented in
+  research-design.md Part D. Not pegged yet (single-cohort percentile); pegging can mirror
+  repertoire if cross-season is needed.

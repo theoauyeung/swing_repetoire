@@ -288,9 +288,29 @@ scalars that don't require shared cluster IDs:**
 **Adjustability** is distinct from raw diversity and is the crux: diversity is only valuable
 if shapes are deployed *appropriately*. Operationalize as:
 
-- **Context-responsiveness:** mutual information (or a classifier's skill) between pitch
-  context and which shape the hitter selects. High MI = the hitter reshapes their swing to
-  the pitch; low MI = they swing the same way regardless.
+- **Context-responsiveness:** how much shape choice depends on pre-swing context. Built in
+  `src/context_response.py` → `context_response.parquet` + `context_response_catalog.md` (per
+  `(batter, stand)` unit, 2024-25, ≥300 swings & k≥2; 512 units). Two estimators, per design:
+  (1) **normalized MI / uncertainty coefficient** `U = (I(C;S) − null) / H(S)` — the fraction of a
+  hitter's shape-choice uncertainty explained by context, bias-corrected with a within-unit
+  permutation null (shuffle context) and divided by `H(S)` so it isn't just repertoire entropy;
+  (2) **classifier skill** — OOF log-loss lift of a multinomial logit predicting shape from context
+  over the usage-prior baseline. Headline `responsiveness` = null-adjusted overall `U` (joint
+  context = count × pitch-group × location); the two estimators agree (r≈0.45) and `responsiveness`
+  is *not* repertoire size (corr with k ≈ −0.35, so the H(S) normalization works). Reported per
+  axis — `resp_count` / `resp_pitch` / `resp_loc` — precisely to separate *volitional* adjustment
+  from *forced* geometry.
+  - **Key v1 finding (2026-07-16):** the dependence is almost entirely **location-driven**
+    (`resp_loc` mean ≈0.22, `resp_pitch` ≈0.17) with **near-zero count-responsiveness**
+    (`resp_count` mean ≈0.006). So the at-contact "shape" is largely *set by where the pitch is*
+    (forced geometry — and `horz_attack_angle`, a shape feature, is the most pitch-reactive one),
+    not by volitional in-count adjustment. This is contamination guardrail (below) + Limitation #1
+    (contact-point-only geometry) showing up in the data: the current shape definition can't cleanly
+    isolate "the hitter chose to swing differently." Implication: the adjustment-payoff test should
+    lean on `resp_count` (the cleanest volitional signal) or a location-excluded variant, and we
+    should be cautious calling the raw headline "adjustability." Open question for scope: is
+    at-contact geometry the right substrate for adjustability at all, or does that need the full
+    swing arc (which we don't have)?
 - **Adjustment payoff:** does higher context-responsiveness predict higher xRV, *after*
   controlling for overall hitter quality and repertoire size? This is the "is adjustability
   actually helping" test: a hitter-level regression of performance on
