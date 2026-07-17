@@ -288,16 +288,18 @@ scalars that don't require shared cluster IDs:**
 **Adjustability** is distinct from raw diversity and is the crux: diversity is only valuable
 if shapes are deployed *appropriately*. Operationalize as:
 
-- **Context-responsiveness:** how much shape choice depends on pre-swing context. Built in
-  `src/context_response.py` → `context_response.parquet` + `context_response_catalog.md` (per
-  `(batter, stand)` unit, 2024-25, ≥300 swings & k≥2; 512 units). Two estimators, per design:
-  (1) **normalized MI / uncertainty coefficient** `U = (I(C;S) − null) / H(S)` — the fraction of a
-  hitter's shape-choice uncertainty explained by context, bias-corrected with a within-unit
-  permutation null (shuffle context) and divided by `H(S)` so it isn't just repertoire entropy;
-  (2) **classifier skill** — OOF log-loss lift of a multinomial logit predicting shape from context
-  over the usage-prior baseline. Headline `responsiveness` = null-adjusted overall `U` (joint
-  context = count × pitch-group × location); the two estimators agree (r≈0.45) and `responsiveness`
-  is *not* repertoire size (corr with k ≈ −0.35, so the H(S) normalization works). Reported per
+- **Context-responsiveness (v2, cluster-free):** how much a hitter changes HOW they swing with the
+  count, holding pitch location + type fixed. Built in `src/context_response.py` →
+  `context_response.parquet` + `context_response_catalog.md` (per `(batter, stand)`, 2024-25,
+  ≥400 swings; 471 units). Measured **directly on the volitional dials** (`bat_speed`,
+  `swing_length`, `swing_path_tilt`), NOT on shape clusters. Per dial: the within-location×pitch-type
+  fixed-effects slope on `strikes` (`cnt_*_d`, in cohort-SD units per added strike; `cnt_*_z` t-stat).
+  `count_adj` = mean(−slope), signed so **higher = compresses more under two-strike pressure**. Face
+  valid: Gallo/Doyle/LeMahieu at the floor (never change), Rizzo/Marte/Nicky Lopez/Caballero on top;
+  orthogonal to sample size (corr −0.05). Base-out (RISP) is a secondary axis (`base_adj`), same
+  machinery holding count fixed too, ~5× weaker. **This replaced the v1 cluster-MI construction**
+  (normalized MI + classifier skill over shape clusters), which read ~0 count-response — an artifact
+  of the cluster substrate (see finding + diagnostic below). Reported per
   axis — `resp_count` / `resp_pitch` / `resp_loc` — precisely to separate *volitional* adjustment
   from *forced* geometry.
   - **Key v1 finding (2026-07-16):** the dependence is almost entirely **location-driven**

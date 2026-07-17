@@ -869,3 +869,16 @@ holding hitter + location fixed (within-FE slope in cohort-SD units), 2024-25.
   shape on location first, (3) approach-shape clustering on the trait dials (tilt/length/bat_speed)
   [strongest per diagnostic], (4) direct dial-shift regressions [most interpretable]. Reference doc for
   when we implement the real adjustability metric; pointer added to research-design.md Part D.
+
+### Context-responsiveness v2 — cluster-free per-dial slopes (2026-07-17)
+Rewrote `context_response.py` per the diagnostic: dropped the v1 cluster-MI construction (it read
+~0 count-response because the clusters are dominated by location-forced attack angles) and now
+measure adjustability DIRECTLY on the volitional dials. Per (batter, stand), 2024-25, ≥400 swings
+(471 units): within-location×pitch-type fixed-effects slope of each dial (bat_speed, swing_length,
+swing_path_tilt) on `strikes`, in cohort-SD units per strike (`cnt_*_d` + t-stat `cnt_*_z`).
+`count_adj = mean(-_d)`, signed so higher = compresses more under two-strike pressure. Base-out
+(RISP) secondary (`base_adj`), holding count fixed too, ~5x weaker.
+- **Face validity strong:** Gallo/Doyle/LeMahieu at the floor (never change swing), Rizzo/Marte/
+  Nicky Lopez/Caballero on top (classic two-strike choke-up). Orthogonal to n_swings (corr −0.05).
+- Attack angles excluded outright (forced by location). Docs synced: research-design Part D + the
+  decontamination doc (v2 = option #4 built; #2/#3 remain optional). data/ outputs gitignored.

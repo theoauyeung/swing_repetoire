@@ -1,8 +1,9 @@
 # Adjustability & location decontamination — design options
 
-**Status:** design/brainstorm (2026-07-17). Not implemented beyond the v1 `context_response.py` and
-the count diagnostic. This is the reference to come back to when implementing the real adjustability
-metric. See also `docs/research-design.md` Part D.
+**Status:** v2 BUILT (2026-07-17) — `context_response.py` now implements the cluster-free,
+per-dial-slope approach (options #4 + the conditioning logic of #1). Options #2 (residualize) and
+#3 (approach-shape clustering) remain unbuilt alternatives, kept here for reference. See also
+`docs/research-design.md` Part D.
 
 ## The problem
 `context_response.py` (v1) measures `I(context; shape)` and found the dependence is **almost entirely
@@ -85,11 +86,15 @@ fixed?* Per-hitter within-location FE regression per dial (exactly the diagnosti
 
 ## Recommended sequencing
 1. **Done:** diagnostic → signal is real but hidden (substrate problem).
-2. Make **#1 (count | location, pitch)** the headline responsiveness in `context_response.py`
-   (replace/augment the joint-MI headline). Add base-out as a second axis, flagged exploratory.
-3. If a richer story is wanted, add **#4** (direct dial-shift table: bat_speed/length vs count &
-   base-out, within location) — the most publishable, interpretable artifact.
-4. Consider **#3** (approach-shape clustering) only if the cluster-based narrative is needed alongside.
+2. **Done (v2):** the diagnostic reordered the plan — since the *clusters* are the wrong substrate,
+   option #1-on-clusters would still be muted, so we went straight to **#4 (direct per-dial slopes),
+   cluster-free**, carrying option #1's conditioning logic (within location × pitch type). Count is
+   the headline (`count_adj` + per-dial `cnt_*_d`); base-out is a secondary axis. Only bat_speed /
+   swing_length / swing_path_tilt are used; the forced attack angles are excluded outright.
+3. **Optional next:** a residualized-angle robustness variant (#2) to show the forced features, net
+   of location, still don't move with count — strengthens the "we didn't just cherry-pick dials" point.
+4. **Optional:** an approach-shape clustering (#3) only if a cluster-based narrative is wanted to sit
+   beside Facet-1 for continuity.
 
 ## Meta-point for the paper
 This is not just a metric bug: **at-contact geometry may be the wrong substrate for "adjustability."**
