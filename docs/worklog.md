@@ -914,3 +914,15 @@ count_adj + swing_plus + repertoire_plus + logn (standardized).
 - Caveats: observational; 2-strike pitch mix differs (location cells only partly absorb it); count_adj
   feature set still under review. Reframes the paper: adjustability payoff is conditional/protective,
   not season-wide.
+
+### Two-strike payoff — within-hitter matched robustness (2026-07-17)
+Tightened `payoff_twostrike.py` against the 2-strike pitch-mix confound with a within-hitter MATCHED
+penalty: each hitter's 2-strike swings vs his OWN early swings in the same exact pitch_type ×
+Statcast plate_zone (ATT-weighted; cells need ≥3 in both groups). Coverage: mean 76% / median 79% of
+2-strike swings matched — not a thin subset.
+- Payoff **survives** fine matching: count_adj → matched_rv **+0.123 (p=0.006)** (vs FE +0.162),
+  matched_whiff **−0.377 (p<1e-9)** (vs FE −0.409). Pitch-mix explained only a small slice; the
+  contact-protection (whiff) effect is essentially unchanged.
+- Conclusion: the two-strike adjustability payoff is robust to controlling pitch type + zone, not an
+  artifact of pitchers expanding the zone. Remaining uncontrolled: release velocity (not in
+  swings_model) + sequencing.
