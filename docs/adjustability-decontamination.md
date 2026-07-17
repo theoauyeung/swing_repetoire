@@ -96,6 +96,29 @@ fixed?* Per-hitter within-location FE regression per dial (exactly the diagnosti
 4. **Optional:** an approach-shape clustering (#3) only if a cluster-based narrative is wanted to sit
    beside Facet-1 for continuity.
 
+## Robustness: residualize on location, re-measure (2026-07-17, option #2 run)
+League-residualized each feature on continuous location + pitch (`feat ~ px + pz + px² + pz² + px·pz +
+pitch_group`), then re-measured the within-hitter count slope. Result (d per strike):
+
+| feature | within-loc slope | residualized-on-location | reading |
+|---|---|---|---|
+| bat_speed | −0.20 | −0.16 | volitional ✓ (survives) |
+| swing_length | −0.13 | −0.13 | volitional ✓ (survives) |
+| swing_path_tilt | −0.03 | ~0.00 | trait/plane — **stable, not adjusted** |
+| vert_attack_angle | −0.13 | −0.13 | survives → **ambiguous** (maybe volitional plane change, not pure forced) |
+| horz_attack_angle | −0.10 | −0.09 | least trait — likely partly forced |
+
+Two takeaways: (1) **count effects are NOT a location artifact** — they survive residualizing on
+location+pitch, which *validates* the conditional design (v2 is measuring something real). (2) The
+crisp "dials volitional / angles forced" split is only partly true: `swing_path_tilt` barely moves
+with count (hitters keep their swing-plane identity), while `vert_attack_angle`'s count-shift is NOT
+explained by location. **Feature-set implication (open decision):** the composite could lean on
+`bat_speed` + `swing_length` (the two clear dials), consider adding `vert_attack_angle` (ambiguous
+but real signal), and `swing_path_tilt` ≈ 0 could be dropped or kept as a "plane-stability" descriptor.
+Also note: controlling for pitch type (v2's `loc_pitch` cells) shrinks bat_speed's raw count slope
+from ~−0.34 (location-only) to ~−0.20 — some of the count↔bat_speed link ran through 2-strike
+pitch-mix; v2 correctly nets that out.
+
 ## Meta-point for the paper
 This is not just a metric bug: **at-contact geometry may be the wrong substrate for "adjustability."**
 Volition shows up earlier (decision, timing, effort) and in the trait dials, not the pitch-forced

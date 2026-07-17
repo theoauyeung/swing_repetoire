@@ -882,3 +882,20 @@ swing_path_tilt) on `strikes`, in cohort-SD units per strike (`cnt_*_d` + t-stat
   Nicky Lopez/Caballero on top (classic two-strike choke-up). Orthogonal to n_swings (corr −0.05).
 - Attack angles excluded outright (forced by location). Docs synced: research-design Part D + the
   decontamination doc (v2 = option #4 built; #2/#3 remain optional). data/ outputs gitignored.
+
+### Residualized robustness + adjustment-payoff draft + paper arc (2026-07-17)
+- **Robustness (option #2):** league-residualized each feature on continuous location+pitch, re-ran
+  the within-hitter count slope. Count effects SURVIVE residualization → real, not a location
+  artifact (validates the conditional design). But the dial/angle split is only partial: bat_speed
+  (−0.16) & swing_length (−0.13) survive; swing_path_tilt ≈0 (plane is a stable trait, not adjusted);
+  vert_attack_angle (−0.13) survives too (ambiguous — maybe volitional plane change, not pure forced);
+  horz least trait. Open feature-set question logged in docs/adjustability-decontamination.md.
+- **Adjustment-payoff regression (DRAFT, `src/payoff_regression.py` → `results/payoff_regression.md`):**
+  hitter-level OLS on LOCAL production (mean delta_run_exp, xwOBAcon), 2024-25, n=450, predictors
+  standardized. **count_adj (adjustability) shows NO payoff** (β +0.04 p=0.36 on RV; −0.05 p=0.16 on
+  xwOBAcon). repertoire_plus has a small significant edge on contact quality (β +0.11 p=0.02). swing_plus
+  and playing time dominate. DB (season wOBA/wRC+) unreachable today (VPN) → used local outcomes,
+  which are better-matched anyway; seasonal variant is a future add. **Implication:** lean on the
+  measurement-contribution framing, not the causal payoff. A sharper *conditional* payoff test
+  (2-strike production ~ adjustment) is the natural next step (season-wide production dilutes it).
+- **README:** added the 4-act paper framework (shapes→width→bridge→adjustability).

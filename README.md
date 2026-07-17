@@ -14,6 +14,21 @@ kept locally and not published to this repo).
 2. **Repertoire diversity.** Batter-level metrics for repertoire size, usage entropy, repertoire
    expansiveness, and context-responsiveness test whether adjustability pays off.
 
+### Paper framework (narrative arc)
+1. **Shapes exist & vary in value** — cluster each hitter's swing shapes; grade each shape's run
+   value in context (**Swing+**). Establishes that hitters carry a repertoire of distinct shapes.
+2. **Repertoire width** — how varied that portfolio is (**Repertoire+**); descriptive, and a control
+   in step 4.
+3. **The bridge (a result, not a detour)** — swing shape *at contact* is largely dictated by pitch
+   location, so a naive "does shape track context" adjustability measure is confounded (variance
+   decomposition + the cluster-MI contamination). This motivates a cleaner instrument.
+4. **Adjustability (the focus)** — measured directly on the volitional dials (bat speed, swing
+   length), conditional on pitch location + type, using count as the clean instrument
+   (**context-responsiveness**). Then an adjustment-payoff regression tests whether it predicts
+   production, controlling for Swing+ and Repertoire+. Repertoire/Swing+ are the scaffolding that
+   lets the adjustability claim be interpretable. Full methodology: `docs/research-design.md`;
+   the decontamination design + robustness: `docs/adjustability-decontamination.md`.
+
 ### Usage
 Scripts are standalone pipeline stages, run in order from the repo root:
 ```bash
