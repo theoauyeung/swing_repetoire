@@ -851,3 +851,21 @@ cross-check. Headline `responsiveness` = null-adj overall U.
   location-excluded variant; be cautious calling the raw headline "adjustability." Documented in
   research-design.md Part D. Not pegged yet (single-cohort percentile); pegging can mirror
   repertoire if cross-season is needed.
+
+### Adjustability: location-leakage diagnostic + decontamination design (2026-07-17)
+Diagnosed why context-responsiveness showed near-zero count signal.
+`experiments/adjustability_count_diagnostic.py` measures the count effect directly on the raw dials,
+holding hitter + location fixed (within-FE slope in cohort-SD units), 2024-25.
+- **Verdict: signal is REAL but HIDDEN.** At 2 strikes, holding location fixed: `bat_speed` d≈−0.34
+  (~−1.9 mph), `swing_length` d≈−0.15 (shorter); forced angle features barely move with count
+  (horz d≈−0.06). Contact types adjust most (Kwan/Hoerner/Freeman bat_speed d −0.33..−0.57).
+  `resp_count≈0` is a **substrate artifact** — count moves bat_speed/length, which the 5-feature
+  clustering under-weights vs the 17°/10° attack-angle axes. So the fix is the shape substrate / how
+  we condition, not abandoning adjustability.
+- **Base-out (RISP) axis** added exploratorily: ~5× weaker than count (bat_speed d≈−0.055) — keep as
+  exploratory, not headline.
+- **Decontamination options catalogued** in `docs/adjustability-decontamination.md`: (1) nested-model
+  conditional MI `I(count; shape | location, pitch)` [cheapest, recommended headline], (2) residualize
+  shape on location first, (3) approach-shape clustering on the trait dials (tilt/length/bat_speed)
+  [strongest per diagnostic], (4) direct dial-shift regressions [most interpretable]. Reference doc for
+  when we implement the real adjustability metric; pointer added to research-design.md Part D.

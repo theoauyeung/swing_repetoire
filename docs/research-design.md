@@ -311,6 +311,14 @@ if shapes are deployed *appropriately*. Operationalize as:
     should be cautious calling the raw headline "adjustability." Open question for scope: is
     at-contact geometry the right substrate for adjustability at all, or does that need the full
     swing arc (which we don't have)?
+  - **Diagnostic (2026-07-17, `experiments/adjustability_count_diagnostic.py`):** measured the count
+    effect directly on the raw dials, holding hitter + location fixed. The volitional signal is
+    **real but hidden** — at 2 strikes hitters ease `bat_speed` (d≈−0.34) and shorten `swing_length`
+    (d≈−0.15) while the forced angle features barely move; `resp_count≈0` is a *substrate artifact*
+    (count moves bat_speed/length, which the 5-feature clustering under-weights vs the high-variance
+    attack angles). Base-out/RISP effect is ~5× weaker than count. **Decontamination options
+    (nested-model conditional MI, shape residualization, an approach-shape substrate on the trait
+    dials, or direct dial-shift regressions) are catalogued in `docs/adjustability-decontamination.md`.**
 - **Adjustment payoff:** does higher context-responsiveness predict higher xRV, *after*
   controlling for overall hitter quality and repertoire size? This is the "is adjustability
   actually helping" test: a hitter-level regression of performance on
