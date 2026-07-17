@@ -899,3 +899,18 @@ swing_path_tilt) on `strikes`, in cohort-SD units per strike (`cnt_*_d` + t-stat
   measurement-contribution framing, not the causal payoff. A sharper *conditional* payoff test
   (2-strike production ~ adjustment) is the natural next step (season-wide production dilutes it).
 - **README:** added the 4-act paper framework (shapes→width→bridge→adjustability).
+
+### Conditional two-strike payoff test — SIGNAL FOUND (2026-07-17)
+`src/payoff_twostrike.py` → `results/payoff_twostrike.md`. The correctly-targeted payoff: do hitters
+who adjust their swing at 2 strikes suffer a smaller two-strike penalty? Per (batter, stand),
+2024-25, n=471. Penalties = within-location FE slope of run value / whiff on two-strike; regressed on
+count_adj + swing_plus + repertoire_plus + logn (standardized).
+- **count_adj → penalty_rv: +0.162 (p=0.0002)** — adjusters lose LESS run value at 2 strikes.
+- **count_adj → penalty_whiff: −0.409 (p<1e-9)** — adjusters whiff much less at 2 strikes (the
+  mechanism: shorten + ease → more contact with 2 strikes).
+- Contrast: the season-wide payoff (payoff_regression.py) was null (β +0.04). So adjustability is a
+  **protective / two-strike skill**, real when tested where it operates, diluted across a full season.
+  swing_plus loads negative on penalty_rv (better hitters drop more at 2K — more to lose).
+- Caveats: observational; 2-strike pitch mix differs (location cells only partly absorb it); count_adj
+  feature set still under review. Reframes the paper: adjustability payoff is conditional/protective,
+  not season-wide.
