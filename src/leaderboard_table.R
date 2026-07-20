@@ -31,6 +31,16 @@ MIN_CLUSTER_SWINGS <- 100   # by-shape: >= 100 swings in the (batter, stand, clu
 PLOTS              <- "results/plots"
 dir.create(PLOTS, showWarnings = FALSE, recursive = TRUE)
 
+# Route a figure filename to its results/plots/<category> subfolder.
+fig_path <- function(name) {
+  sub <- if (startsWith(name, "repertoire")) "repertoire"
+    else if (grepl("^(swingplus_leaderboard|swingplus_bottom|swingplus_by_cluster|shape_breakdown)", name)) "swing_plus"
+    else "predictiveness"
+  d <- file.path(PLOTS, sub)
+  dir.create(d, showWarnings = FALSE, recursive = TRUE)
+  file.path(d, name)
+}
+
 PAL_COLS <- c("#2166ac", "#f7f7f7", "#d73027")   # low = blue -> high = red
 
 args  <- commandArgs(trailingOnly = TRUE)
@@ -112,7 +122,7 @@ if (!is.na(DRILL)) {
   }
   nm   <- paste(sort(unique(d$label)), collapse = " / ")   # actual hitter name(s), not the search term
   slug <- gsub("(^_|_$)", "", gsub("[^a-z0-9]+", "_", tolower(DRILL)))
-  out  <- file.path(PLOTS, paste0("shape_breakdown_", slug, "_gt.png"))
+  out  <- fig_path(paste0("shape_breakdown_", slug, "_gt.png"))
   make_leaderboard(d |> select(all_of(cl_cols)), "SwingPlus", pal_cl, cl_labels, cl_align,
                    sprintf("**Swing shapes by value - %s**", nm),
                    sprintf("Each of the hitter's shapes ranked by Swing+  &middot;  color = league scale (all %d shapes)", nrow(cl_pool)),
@@ -146,12 +156,12 @@ sp_sub    <- sprintf("Mean per-swing xRV, 0-100 scale (50 = league-average)  &mi
 make_leaderboard(head(sp_pool, TOP_N) |> select(all_of(sp_cols)),
                  "SwingPlus", pal_sp, sp_labels, sp_align,
                  "**Swing+ Leaderboard**", sp_sub, sp_foot,
-                 file.path(PLOTS, "swingplus_leaderboard_gt.png"), width = 760)
+                 fig_path("swingplus_leaderboard_gt.png"), width = 760)
 
 make_leaderboard(tail(sp_pool, TOP_N) |> select(all_of(sp_cols)),
                  "SwingPlus", pal_sp, sp_labels, sp_align,
                  "**Swing+ Leaderboard**", sp_sub, sp_foot,
-                 file.path(PLOTS, "swingplus_bottom_gt.png"), width = 760)
+                 fig_path("swingplus_bottom_gt.png"), width = 760)
 
 # ── Repertoire+ (unit = batter x stand) ─────────────────────────────────────────
 
@@ -182,12 +192,12 @@ rep_sub    <- sprintf("Repertoire width: usage-weighted shape spread × effectiv
 make_leaderboard(head(rep_pool, TOP_N) |> select(all_of(rep_cols)),
                  "RepertoirePlus", pal_rep, rep_labels, rep_align,
                  "**Repertoire+ Leaderboard**", rep_sub, rep_foot,
-                 file.path(PLOTS, "repertoire_leaderboard_gt.png"), width = 820)
+                 fig_path("repertoire_leaderboard_gt.png"), width = 820)
 
 make_leaderboard(tail(rep_pool, TOP_N) |> select(all_of(rep_cols)),
                  "RepertoirePlus", pal_rep, rep_labels, rep_align,
                  "**Repertoire+ Leaderboard**", rep_sub, rep_foot,
-                 file.path(PLOTS, "repertoire_bottom_gt.png"), width = 820)
+                 fig_path("repertoire_bottom_gt.png"), width = 820)
 
 # ── Swing+ by shape (top / bottom), reusing cl_pool + pal_cl from above ──────────────────────────
 
@@ -197,11 +207,11 @@ cl_sub <- sprintf("Value of a single swing shape (>=%d swings)  &middot;  color 
 make_leaderboard(head(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
                  "**Swing+ by Shape**", cl_sub, cl_foot,
-                 file.path(PLOTS, "swingplus_by_cluster_gt.png"), width = 900, pct_col = "UsageProp")
+                 fig_path("swingplus_by_cluster_gt.png"), width = 900, pct_col = "UsageProp")
 
 make_leaderboard(tail(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
                  "**Swing+ by Shape**", cl_sub, cl_foot,
-                 file.path(PLOTS, "swingplus_by_cluster_bottom_gt.png"), width = 900, pct_col = "UsageProp")
+                 fig_path("swingplus_by_cluster_bottom_gt.png"), width = 900, pct_col = "UsageProp")
 
 cat("done\n")
