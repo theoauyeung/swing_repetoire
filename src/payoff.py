@@ -24,7 +24,7 @@ Two penalty estimators per unit (2024-25, >= MIN_SWINGS):
               Statcast plate_zone (ATT-weighted; cells need >= MATCH_MIN in both groups). Nets out the
               two-strike pitch-mix shift far more finely; `coverage` = frac of 2K swings matched.
 
-Adjustability metric is v3 (context_response.py): unsigned adjusted-R^2 magnitudes. adj_count is the
+Adjustability metric is v3 (adjustability.py): unsigned adjusted-R^2 magnitudes. adj_count is the
 count axis (matched to the two-strike mechanism); adj_pitch enters alongside so a count payoff isn't
 pitch adjustment relabeled. adj_gamestate is dropped (YoY-unreliable, r=0.19).
 
@@ -32,7 +32,7 @@ CAVEATS: observational; matched version controls pitch type + zone but not relea
 swings_model) or sequencing; adj_count is unsigned (payoff => net adaptive on average); take-decision
 quality uncontrolled (research-design Limitation #3); a seasonal wOBA/wRC+ variant needs the DB (VPN).
 
-Input:  data/swings_model.parquet, data/context_response.parquet, data/repertoire_scores.parquet,
+Input:  data/swings_model.parquet, data/adjustability.parquet, data/repertoire_scores.parquet,
         data/xrv_swings.parquet
 Output: results/payoff.md (committed); prints tables.
 
@@ -101,7 +101,7 @@ def swing_plus_unit():
 
 # ------------------------------------------------------------------ season-wide (the null foil)
 def season_wide():
-    cr = pd.read_parquet(DATA / "context_response.parquet",
+    cr = pd.read_parquet(DATA / "adjustability.parquet",
                          columns=KEY + ["n_swings", "adjustability", "adj_count"])
     rep = pd.read_parquet(DATA / "repertoire_scores.parquet", columns=KEY + ["repertoire_plus", "k"])
     u = cr.merge(rep, on=KEY).merge(swing_plus_unit(), on=KEY)
@@ -174,7 +174,7 @@ def two_strike():
                      "matched_rv": m_rv, "matched_whiff": m_wh, "coverage": cov})
     pen = pd.DataFrame(rows)
 
-    cr = pd.read_parquet(DATA / "context_response.parquet",
+    cr = pd.read_parquet(DATA / "adjustability.parquet",
                          columns=KEY + ["n_swings", "adjustability", "adj_count", "adj_pitch"])
     rep = pd.read_parquet(DATA / "repertoire_scores.parquet", columns=KEY + ["repertoire_plus"])
     df = pen.merge(cr, on=KEY).merge(rep, on=KEY).merge(swing_plus_unit(), on=KEY)

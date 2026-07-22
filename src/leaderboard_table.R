@@ -34,6 +34,7 @@ dir.create(PLOTS, showWarnings = FALSE, recursive = TRUE)
 # Route a figure filename to its results/plots/<category> subfolder.
 fig_path <- function(name) {
   sub <- if (startsWith(name, "repertoire")) "repertoire"
+    else if (startsWith(name, "adjustability")) "adjustability"
     else if (grepl("^(swingplus_leaderboard|swingplus_bottom|swingplus_by_cluster|shape_breakdown)", name)) "swing_plus"
     else "predictiveness"
   d <- file.path(PLOTS, sub)
@@ -213,5 +214,39 @@ make_leaderboard(tail(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
                  "**Swing+ by Shape**", cl_sub, cl_foot,
                  fig_path("swingplus_by_cluster_bottom_gt.png"), width = 900, pct_col = "UsageProp")
+
+# ── Adjustability (unit = batter x stand) ────────────────────────────────────────
+# How much a hitter reshapes his swing by situation, net of pitch location (adjusted-R^2 magnitude on
+# the trait dials; see src/adjustability.py). Colored on the headline `adjustability`, with the count
+# and pitch axes shown alongside: the payoff (two-strike protection) lives in adj_count, while the
+# headline is adj_pitch-dominated -- so the breakdown matters more here than the single number.
+
+adj_pool <- read_parquet("data/adjustability.parquet",
+                         col_select = c("batter_id", "batter_stand", "label", "n_swings",
+                                        "adjustability", "adj_count", "adj_pitch")) |>
+  mutate(Adjustability = round(adjustability, 3),
+         Count = round(adj_count, 3),
+         Pitch = round(adj_pitch, 3)) |>
+  arrange(desc(Adjustability)) |>
+  mutate(Rank = row_number())
+
+pal_adj <- col_numeric(PAL_COLS, domain = range(adj_pool$Adjustability))
+adj_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
+                   Adjustability = "Adjustability", Count = "Count axis", Pitch = "Pitch axis")
+adj_align  <- c("Rank", "batter_stand", "Adjustability", "Count", "Pitch")
+adj_cols   <- c("Rank", "batter_id", "label", "batter_stand", "Adjustability", "Count", "Pitch")
+adj_foot   <- "Adjustability = incremental adjusted-R² the situation adds over pitch location (one joint regression per hitter). Count/Pitch = each axis's unique contribution, net of the others. The two-strike payoff is in the Count axis."
+adj_sub    <- sprintf("Situational swing change, net of pitch location  &middot;  &ge;%d swings 2024-25  &middot;  color spans all %d qualified units",
+                      400, nrow(adj_pool))
+
+make_leaderboard(head(adj_pool, TOP_N) |> select(all_of(adj_cols)),
+                 "Adjustability", pal_adj, adj_labels, adj_align,
+                 "**Adjustability Leaderboard**", adj_sub, adj_foot,
+                 fig_path("adjustability_leaderboard_gt.png"), width = 820)
+
+make_leaderboard(tail(adj_pool, TOP_N) |> select(all_of(adj_cols)),
+                 "Adjustability", pal_adj, adj_labels, adj_align,
+                 "**Adjustability Leaderboard**", adj_sub, adj_foot,
+                 fig_path("adjustability_bottom_gt.png"), width = 820)
 
 cat("done\n")
