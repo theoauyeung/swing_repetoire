@@ -50,6 +50,16 @@ SEASONS = [2024, 2025]
 MIN_SWINGS = 400
 MATCH_MIN = 3     # min swings in BOTH groups for a matched pitch_type x zone cell to count
 
+# pa_outcome -> linear_weights.csv outcome_type. Walks/HBP end on a take, so they are absent from a
+# swing table; the resulting metric is a "swing wOBA" over PAs that END on a swing (BIP + swinging K).
+PA_TO_LW = {"home_run": "home_run", "triple": "triple", "double": "double", "single": "single",
+            "strikeout": "strikeout", "strikeout_double_play": "strikeout",
+            "field_out": "out_in_play", "force_out": "out_in_play", "double_play": "out_in_play",
+            "grounded_into_double_play": "out_in_play", "sac_fly": "out_in_play",
+            "sac_fly_double_play": "out_in_play", "fielders_choice": "out_in_play",
+            "fielders_choice_out": "out_in_play", "triple_play": "out_in_play",
+            "field_error": "other", "catcher_interf": "other"}
+
 
 def ols(y, X, names):
     """Plain OLS with classical SEs on standardized inputs. Returns (tidy table, R^2, n)."""
@@ -115,10 +125,13 @@ def season_wide():
         g[c] /= g["n_swings"]
 
     s = pd.read_parquet(DATA / "swings_model.parquet",
-                        columns=["batter_id", "game_year", "delta_run_exp", "xwoba"])
+                        columns=["batter_id", "game_year", "delta_run_exp", "xwoba", "pa_outcome"])
     s = s[s.game_year.isin(SEASONS)]
+    lw = pd.read_csv(DATA / "linear_weights.csv").set_index("outcome_type")["lw"].to_dict()
+    s["woba_lw"] = s["pa_outcome"].map(PA_TO_LW).map(lw)          # NaN on non-PA-ending swings -> dropped
     prod = pd.concat([s.groupby("batter_id")["delta_run_exp"].mean().rename("rv_per_swing"),
-                      s.dropna(subset=["xwoba"]).groupby("batter_id")["xwoba"].mean().rename("xwobacon")],
+                      s.dropna(subset=["xwoba"]).groupby("batter_id")["xwoba"].mean().rename("xwobacon"),
+                      s.dropna(subset=["woba_lw"]).groupby("batter_id")["woba_lw"].mean().rename("woba_lw")],
                      axis=1).reset_index()
     df = g.merge(prod, on="batter_id", how="inner")
     df = df[df["n_swings"] >= MIN_SWINGS].copy()
@@ -130,8 +143,10 @@ def season_wide():
          f"Batter level, usage-weighted stances, MLB {SEASONS[0]}-{SEASONS[1]}, >={MIN_SWINGS} tracked "
          f"swings (**n={len(df)}**). Realized production; predictors standardized. **Expected null** — "
          "a two-strike skill washes out over a full season; this rules out 'adjusters are just good "
-         "hitters'.\n"]
-    for outcome, desc in [("rv_per_swing", "mean delta_run_exp/swing"), ("xwobacon", "xwOBA on contact")]:
+         "hitters'. `woba_lw` = wOBA-style value per PA-ending swing, from `data/linear_weights.csv` "
+         "(walks/HBP end on a take, so this is production over PAs that end on a swing).\n"]
+    for outcome, desc in [("rv_per_swing", "mean delta_run_exp/swing"), ("xwobacon", "xwOBA on contact"),
+                          ("woba_lw", "swing wOBA — linear weights, per PA-ending swing")]:
         d = df.dropna(subset=[outcome])
         zz = lambda c: (d[c] - d[c].mean()) / d[c].std()
         X = np.column_stack([np.ones(len(d))] + [zz(c).to_numpy() for c in preds])
