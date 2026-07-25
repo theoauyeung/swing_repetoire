@@ -14,4 +14,10 @@ tornado
 statsmodels
 scikit-learn
 lightgbm
+xgboost
 pyarrow
+tabulate
+jinja2
+ipykernel
+dataframe_image
+nbconvert
