@@ -10,38 +10,49 @@ kept locally and not published to this repo).
 
 ## Resuming on a new machine
 
-The **code** is here on GitHub. The **data** (`data/`, ~273 MB) and **internal docs** (`CLAUDE.md`,
-`docs/`, `results/payoff.md`) are gitignored, so they ship separately in a **resume bundle** —
-`swing-repertoire-resume-<date>.zip` (in Driveline OneDrive). Steps:
+The **code** is here on GitHub. The **data** (`data/`, ~273 MB — including the raw DB extract
+`swings_2024_2026_mlb.parquet`) and **internal docs** (`CLAUDE.md`, `docs/`, `results/payoff.md`) are
+gitignored, so they ship separately in a **resume bundle** — `swing-repertoire-resume-<date>.zip`,
+stored in **Driveline OneDrive** (work account `theo.an-yeung@drivelinebaseball.com`). Steps below are
+written for **macOS**.
 
-1. **Clone**
+1. **Get the data bundle from OneDrive (browser — no app needed).**
+   - Go to **onedrive.com** (or **office.com** → OneDrive) and **sign in with the Driveline work
+     account** `theo.an-yeung@drivelinebaseball.com`. (The bundle is on the *work* OneDrive, not a
+     personal Microsoft account.)
+   - In *My files* (root), download **`swing-repertoire-resume-<date>.zip`** → it lands in
+     `~/Downloads`.
+2. **Clone the repo**
    ```bash
    git clone https://github.com/theoauyeung/swing_repetoire.git
    cd swing_repetoire
    ```
-2. **Unpack the bundle into the repo root** — download the zip from OneDrive and extract it here, so
-   `data/`, `CLAUDE.md`, and `docs/` land in place (right-click → Extract Here, or
-   `unzip swing-repertoire-resume-*.zip -d .`).
-3. **Python env** (uv; deps pinned in `requirements.txt`)
+3. **Unpack the bundle into the repo root** so `data/`, `CLAUDE.md`, `docs/`, and `results/payoff.md`
+   land in place:
+   ```bash
+   unzip ~/Downloads/swing-repertoire-resume-*.zip -d .
+   ```
+4. **Python env** (uv; deps pinned in `requirements.txt`)
    ```bash
    uv venv .venv --python 3.13
-   source .venv/Scripts/activate          # Windows Git Bash — mac/Linux: source .venv/bin/activate
+   source .venv/bin/activate               # macOS/Linux (Windows Git Bash: source .venv/Scripts/activate)
    uv pip install -r requirements.txt
    python -m ipykernel install --user --name driveline --display-name "Python (driveline)"
    ```
-4. **Verify** (env active, from repo root)
+5. **Verify** (env active, from repo root)
    ```bash
    python src/adjustability.py             # -> data/adjustability.parquet
    python src/payoff.py                    # -> results/payoff.md
    ```
    then open `src/adjustability_results.ipynb` on the **Python (driveline)** kernel and Run All.
 
-**Fix these machine-specific paths on the new laptop:** `.vscode/settings.json`
-(`python.defaultInterpreterPath`) and the hardcoded `Rscript.exe` path in the notebooks +
-`src/leaderboard_table.R` — point them at your own venv / R install. **R (leaderboards only, optional):**
-R 4.6+ with `arrow, dplyr, gt, gtExtras, mlbplotR, scales, webshot2`. **DB access is only needed to
-re-pull raw data** (`extract.py`) — the bundle already contains every extract, so analysis resumes
-without the VPN or `BIOMECH_DB_*` creds.
+**Fix these machine-specific paths on the Mac:** `.vscode/settings.json`
+(`python.defaultInterpreterPath` → your Mac venv, e.g. `${workspaceFolder}/.venv/bin/python`) and the
+hardcoded `Rscript` path in the notebooks + `src/leaderboard_table.R` — on macOS R lives at
+`/usr/local/bin/Rscript` (Intel) or `/opt/homebrew/bin/Rscript` (Apple Silicon), or just put it on
+`PATH`. **R (leaderboards only, optional):** R 4.6+ with `arrow, dplyr, gt, gtExtras, mlbplotR, scales,
+webshot2`. **DB access is only needed to re-pull raw data** (`extract.py`) — the bundle already contains
+every extract (including the raw DB load), so analysis resumes without the VPN or `BIOMECH_DB_*` creds.
 
 ### Two facets
 1. **Swing-shape value.** A per-batter GMM clusters swing shapes, and a bespoke xRV model assigns
