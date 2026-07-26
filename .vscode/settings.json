@@ -1,5 +1,5 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.defaultInterpreterPath": "${userHome}/.venvs/driveline/bin/python",
     "python.terminal.activateEnvironment": true,
     "python.testing.unittestArgs": [
         "discover",
