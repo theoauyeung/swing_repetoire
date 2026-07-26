@@ -1,87 +1,62 @@
 # swing-repertoire
 
-Research on MLB swing shapes using Statcast bat tracking (2024+): (1) grading the run value of
-each hitter's individual swing shapes conditioned on the situation, and (2) testing whether a
-wider, more *adjustable* swing repertoire actually improves outcomes.
+Statcast bat tracking (MLB 2024–2026) gives us swing geometry on every competitive swing, including whiffs and fouls. That makes it possible to study what a hitter's different swing shapes are worth in context, and whether deploying them situationally actually helps.
 
-Data source: Driveline `mlb_db` (Statcast bat tracking, MLB 2024+). See `docs/research-design.md`
-for the full design, data reality, methodology, limitations, and milestones (that design doc is
-kept locally and not published to this repo).
+Two questions:
 
-## Resuming on a new machine
+1. What is the run value of each hitter's distinct swing shapes, conditioned on count, pitch location, pitch type, and base-out state?
+2. Does a wider, more context-sensitive swing repertoire improve outcomes?
 
-See [`docs/project_resume.md`](docs/project_resume.md) for the full step-by-step guide (data bundle, env setup, machine-specific path fixes).
+Data: Driveline `mlb_db`. Full methodology: `docs/research-design.md` (not in this repo).
 
-### Two facets
-1. **Swing-shape value.** A per-batter GMM clusters swing shapes, and a bespoke xRV model assigns
-   each shape a run value conditioned on count, pitch location, pitch type, and base-out state.
-2. **Repertoire diversity.** Batter-level metrics for repertoire size, usage entropy, repertoire
-   expansiveness, and context-responsiveness test whether adjustability pays off.
+## What's built
 
-### Paper framework (narrative arc)
-1. **Shapes exist & vary in value** - cluster each hitter's swing shapes; grade each shape's run
-   value in context (**Swing+**). Establishes that hitters carry a repertoire of distinct shapes.
-2. **Repertoire width** - how varied that portfolio is (**Repertoire+**); descriptive, and a control
-   in step 4.
-3. **The bridge (a result, not a detour)** - swing shape *at contact* is largely dictated by pitch
-   location, so a naive "does shape track context" adjustability measure is confounded (variance
-   decomposition + the cluster-MI contamination). This motivates a cleaner instrument.
-4. **Adjustability (the focus)** - measured directly on the volitional dials (bat speed, swing
-   length), conditional on pitch location + type, using count as the clean instrument
-   (**context-responsiveness**). Then an adjustment-payoff regression tests whether it predicts
-   production, controlling for Swing+ and Repertoire+. Repertoire/Swing+ are the scaffolding that
-   lets the adjustability claim be interpretable. 
+A per-batter GMM groups each hitter's swings into distinct shapes (median: 2, max: 6). An xRV model grades each shape in context and scales it as Swing+ (50 = league average). Repertoire+ measures how wide a hitter's shape portfolio is across 5 dimensions, weighted by usage. Adjustability measures how much bat speed, swing length, and tilt track the situation, net of where the pitch is.
 
-### Usage
-Scripts are standalone pipeline stages, run in order from the repo root:
+The main finding: adjustability is a two-strike skill. Hitters who adjust by count give back less run value at two strikes (β = +0.17, p = 0.0001) and whiff less (β = −0.39, p < 1e-8). Season-wide, swing quality and playing time dominate. Raw repertoire width, if anything, hurts at two strikes (β = −0.15, p = 0.001).
+
+## Pipeline
+
+Run from repo root with the `driveline` env active, in order:
+
 ```bash
-python src/extract.py     # mlb_db -> data/swings_2024_2026_mlb.parquet + profile.md
-python src/features.py    # competitive-swing filter -> data/swings_model.parquet
-python src/cluster.py     # per-batter GMM -> data/cluster_* + batter_repertoire + catalog
+python src/extract.py        # mlb_db → data/swings_2024_2026_mlb.parquet
+python src/features.py       # competitive-swing filter → data/swings_model.parquet
+python src/cluster.py        # per-batter GMM → cluster_*, batter_repertoire
+python src/xRV_model.py      # per-swing xRV → xrv_swings.parquet
+python src/interpret.py      # archetype lexicon → shape_archetypes
+python src/cards.py          # swing ID cards → shape_cards.parquet
+python src/repertoire.py     # Repertoire+ → repertoire_scores.parquet
+python src/adjustability.py  # adjustability → adjustability.parquet
+python src/payoff.py         # payoff regression → results/payoff.md
+Rscript src/leaderboard_table.R  # leaderboard PNGs via gt + mlbplotR
 ```
-Pipeline order: `extract → features → cluster → (xrv → value_model → within_batter → diversity →
-reports, not yet built)`.
 
-Both result notebooks save their outputs as PNGs into category subfolders under `results/plots/`
-(committed): `swing_plus/`, `repertoire/`, `predictiveness/`, `usage_heatmap/`, `swing_cards/`.
-`src/cluster_results.ipynb` writes its figures and the usage-heatmap table, and
-`src/swing+_results.ipynb` writes its Swing+ / Repertoire+ leaderboards. A `plot_path()` helper
-(mirrored in `src/leaderboard_table.R` as `fig_path()`) routes each figure to its folder. Tables are
-rendered with `dataframe_image` (matplotlib backend).
+Notebooks (`src/cluster_results.ipynb`, `src/swing+_results.ipynb`, `src/adjustability_results.ipynb`) save figures as PNGs into `results/plots/` subfolders. Tables render via `dataframe_image` (matplotlib backend).
 
-## Details
-- **Project Owner:** Theo Au-Yeung
-- **Project's Notion Page:** [https://notion.so](https://notion.so) *(TBD)*
-- **Project's Slack Channel:** `#proj-swing-repertoire` *(TBD)*
+## Environment
+
+Uses the shared `driveline` venv at `~/.venvs/driveline` (uv, Python 3.13). Select the "Python (driveline)" kernel for notebooks.
+
+```bash
+# activate (macOS/Linux)
+source ~/.venvs/driveline/bin/activate
+
+# recreate from scratch
+uv venv ~/.venvs/driveline --prompt driveline
+VIRTUAL_ENV=~/.venvs/driveline uv pip install -r requirements.txt
+python -m ipykernel install --user --name driveline --display-name "Python (driveline)"
+
+# add a package
+VIRTUAL_ENV=~/.venvs/driveline uv pip install <pkg>
+```
+
+`data/` is gitignored and holds all extracts — never commit it. DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` via `get_secret()` in `src/extract.py`. Only needed to re-pull raw data; the resume bundle already has every extract.
+
+## New machine
+
+See [`docs/project_resume.md`](docs/project_resume.md).
 
 ## Contributors
-* [@theoauyeung](https://github.com/theoauyeung)
 
-## Getting Started
-
-### Setup the environment
-This project uses the **shared `driveline` uv venv** (`~/.venvs/driveline`), one environment
-reused across Driveline workflow. Activate it, or select the **"Python (driveline)"** kernel in
-your IDE or for notebooks. To (re)create it:
-```bash
-uv venv ~/.venvs/driveline --prompt driveline
-VIRTUAL_ENV=~/.venvs/driveline uv pip install pandas pyarrow scikit-learn lightgbm scipy numpy \
-    mysql-connector-python requests matplotlib tabulate jinja2 ipykernel dataframe_image
-python -m ipykernel install --user --name driveline --display-name "Python (driveline)"
-source ~/.venvs/driveline/Scripts/activate   # Git Bash; Windows: ~/.venvs/driveline/Scripts/activate.bat
-```
-
-### Setup the project
-- `data/` (gitignored) holds all extracts. It is **never committed**, because it contains player
-  data.
-- DB credentials resolve from `~/.claude/.env` as `BIOMECH_DB_HOST/PORT/USER/PASS` via the
-  `get_secret()` helper in `src/extract.py` (the `mlb-db-analysis` skill convention). This project
-  reads creds from that file rather than a repo-local `.env`. The template `.config`/`.env`
-  scaffolding is retained but unused by the pipeline scripts. Read-only user, database `mlb_db`.
-
-### Test-run
-```bash
-python src/extract.py
-```
-
-
+[@theoauyeung](https://github.com/theoauyeung)
