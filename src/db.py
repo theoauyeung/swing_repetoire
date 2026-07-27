@@ -58,12 +58,22 @@ _CSVS = {
 }
 
 
-def connect() -> duckdb.DuckDBPyConnection:
+def connect(*only: str) -> duckdb.DuckDBPyConnection:
+    """Return a DuckDB connection with views over project parquets and CSVs.
+
+    Pass view names to restrict which views are created (avoids reading metadata
+    for large files you don't need):
+
+        con = db.connect("adjustability", "repertoire_scores")
+        con = db.connect()  # all views (original behavior)
+    """
     con = duckdb.connect()
-    for name, rel in _PARQUETS.items():
+    parquets = {k: v for k, v in _PARQUETS.items() if not only or k in only}
+    csvs     = {k: v for k, v in _CSVS.items()     if not only or k in only}
+    for name, rel in parquets.items():
         path = str(ROOT / rel)
         con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path}')")
-    for name, rel in _CSVS.items():
+    for name, rel in csvs.items():
         path = str(ROOT / rel)
         con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_csv_auto('{path}')")
     return con
