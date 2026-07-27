@@ -86,10 +86,10 @@ def main():
     df = add_context(pd.read_parquet(
         DATA / "swings_model.parquet",
         columns=["game_year", "batter_full_name"] + KEY + ["balls", "strikes", "outs_when_up",
-                 "plate_x", "plate_z", "sz_top", "sz_bot", "pitch_type",
+                 "plate_x", "plate_z", "sz_top", "sz_bot", "pitch_type", "pitcher_throws",
                  "on_1b_id", "on_2b_id", "on_3b_id"] + DIALS).query("game_year in @SEASONS"))
     axes = {"count": ["balls", "strikes"], "gamestate": ["base_state", "outs_when_up"],
-            "pitch": ["pitch_group"]}
+            "pitch": ["pitch_group"], "platoon": ["pitcher_throws"]}
     all_cols = [c for cols in axes.values() for c in cols]
 
     rows = []
@@ -125,11 +125,11 @@ def main():
     print(f"adjustability: mean {out.adjustability.mean():.3f}, median {out.adjustability.median():.3f}, "
           f"max {out.adjustability.max():.3f}")
     print(f"per-axis means -> count {out.adj_count.mean():.3f}  gamestate {out.adj_gamestate.mean():.3f}  "
-          f"pitch {out.adj_pitch.mean():.3f}")
+          f"pitch {out.adj_pitch.mean():.3f}  platoon {out.adj_platoon.mean():.3f}")
     print("\ntop 8:\n", out.head(8)[["label", "batter_stand", "n_swings", "adjustability",
-                                      "adj_count", "adj_gamestate", "adj_pitch"]].to_string(index=False))
+                                      "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]].to_string(index=False))
     print("\nbottom 5:\n", out.tail(5)[["label", "batter_stand", "adjustability",
-                                        "adj_count", "adj_gamestate", "adj_pitch"]].to_string(index=False))
+                                        "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]].to_string(index=False))
 
 
 if __name__ == "__main__":

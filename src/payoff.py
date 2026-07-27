@@ -12,25 +12,11 @@ Two tests, and the CONTRAST between them is the finding:
       axes + controls, INCLUDING an `adj_count x swing_plus` interaction: is the two-strike protection
       larger for high- or low-quality swings?
 
-Outcome is REALIZED run value (`delta_run_exp`) — the honest payoff. We deliberately do NOT use the
-model's expected `xrv` as the outcome: `xrv` is fit on the same trait dials `adj_count` is built from,
-so an xrv-based penalty regressed on adj_count would test "does our model reward the adjusted shape,"
-not "do real outcomes improve." xRV enters only as `swing_plus` (mean xrv_grade), the swing-QUALITY
-control — its correct role. `is_whiff` is the mechanism outcome (the contact channel).
-
 Two penalty estimators per unit (2024-25, >= MIN_SWINGS):
   COARSE FE — within-location(3x3)xpitch-group FE slope of the outcome on two_strike.
   MATCHED   — each hitter's 2-strike swings vs his OWN early swings in the same exact pitch_type x
               Statcast plate_zone (ATT-weighted; cells need >= MATCH_MIN in both groups). Nets out the
               two-strike pitch-mix shift far more finely; `coverage` = frac of 2K swings matched.
-
-Adjustability metric is v3 (adjustability.py): unsigned adjusted-R^2 magnitudes. adj_count is the
-count axis (matched to the two-strike mechanism); adj_pitch enters alongside so a count payoff isn't
-pitch adjustment relabeled. adj_gamestate is dropped (YoY-unreliable, r=0.19).
-
-CAVEATS: observational; matched version controls pitch type + zone but not release velocity (not in
-swings_model) or sequencing; adj_count is unsigned (payoff => net adaptive on average); take-decision
-quality uncontrolled (research-design Limitation #3); a seasonal wOBA/wRC+ variant needs the DB (VPN).
 
 Input:  data/swings_model.parquet, data/adjustability.parquet, data/repertoire_scores.parquet,
         data/xrv_swings.parquet
@@ -186,7 +172,7 @@ def two_strike():
         rows.append({"batter_id": bid, "batter_stand": stand,
                      "penalty_rv": fe_slope(g, "delta_run_exp", "twoK", "loc_pitch"),
                      "penalty_whiff": fe_slope(g, "is_whiff", "twoK", "loc_pitch"),
-                     "matched_rv": m_rv, "matched_whiff": m_wh, "coverage": cov})
+                     "two_strike_rv_delta": m_rv, "two_strike_whiff_delta": m_wh, "coverage": cov})
     pen = pd.DataFrame(rows)
 
     cr = pd.read_parquet(DATA / "adjustability.parquet",
@@ -206,11 +192,11 @@ def two_strike():
          "count adjustment is net protective.**\n",
          f"Matched coverage: mean {df.coverage.mean()*100:.0f}% of 2-strike swings matched (median "
          f"{df.coverage.median()*100:.0f}%). League avg penalties — FE rv {df.penalty_rv.mean():+.4f}, "
-         f"matched rv {df.matched_rv.mean():+.4f} run value/swing at 2K (everyone drops).\n"]
+         f"matched rv {df.two_strike_rv_delta.mean():+.4f} run value/swing at 2K (everyone drops).\n"]
     outs = [("penalty_rv", "COARSE FE, run value — higher = more resilient"),
-            ("matched_rv", "MATCHED, run value — higher = more resilient"),
+            ("two_strike_rv_delta", "MATCHED, run value — higher = more resilient"),
             ("penalty_whiff", "COARSE FE, whiff — lower = fewer extra whiffs"),
-            ("matched_whiff", "MATCHED, whiff — lower = fewer extra whiffs")]
+            ("two_strike_whiff_delta", "MATCHED, whiff — lower = fewer extra whiffs")]
     for outcome, arrow in outs:
         d = df.dropna(subset=[outcome])
         zz = lambda c: ((d[c] - d[c].mean()) / d[c].std()).to_numpy()
@@ -224,7 +210,7 @@ def two_strike():
 
     axes = ["adj_count", "adj_pitch", "adjustability"]
     cors = {f"{a}|{o}": round(float(df[a].corr(df[o])), 3)
-            for o in ["penalty_rv", "matched_rv", "penalty_whiff", "matched_whiff"] for a in axes}
+            for o in ["penalty_rv", "two_strike_rv_delta", "penalty_whiff", "two_strike_whiff_delta"] for a in axes}
     L += ["### Zero-order correlations of each adjustment axis with the two-strike penalties",
           "\n".join(f"- {k}: {v:+.3f}" for k, v in cors.items()), ""]
     return L
