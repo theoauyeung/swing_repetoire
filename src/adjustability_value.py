@@ -1,7 +1,13 @@
 """DML (Double Machine Learning) causal estimate: does swing adjustability improve outcomes?
 
-Treatment : adjustability (raw v4 composite — incremental adj-R² of situation over location,
-            averaged over 3 swing dials; 2024-25, ≥400 swings per unit).
+Treatments: all four component axes + composite:
+  adjustability  — composite (all situation over location-only)
+  adj_count      — count axis unique contribution
+  adj_gamestate  — game-state axis unique contribution
+  adj_pitch      — pitch-type axis unique contribution
+  adj_platoon    — pitcher-handedness axis unique contribution
+Each axis is run as a separate DML — marginal effect conditional on non-adjustment confounders.
+
 Confounders: swing_plus, log(n_swings), repertoire_plus, batter handedness,
              pitcher quality faced (swing-weighted mean pitcher Δrun-exp from this dataset),
              whiff rate (contact-skill proxy).
@@ -12,13 +18,8 @@ residualize both treatment and outcome on confounders independently. θ = OLS(Y_
 Treatment and outcome both standardized so θ is a standardized partial effect. SE from the
 DML influence-function sandwich estimator — no bootstrap required.
 
-Nuisance R² diagnostics: r2_T measures how well XGBoost predicts adjustability from
-confounders (low → little confounding removed, DML ≈ naive OLS). r2_Y measures how well
-confounders explain the outcome.
-
-Caveat: conditional unconfoundedness assumed — θ is causal only if the confounders listed
-span all common causes of adjustability and outcomes. Unmeasured confounders (true plate
-discipline, pitcher sequencing, role/contract incentives) remain a threat.
+Caveat: conditional unconfoundedness assumed. Unmeasured confounders (true plate discipline,
+pitcher sequencing, role/contract incentives) remain a threat.
 
 Output: results/adjustability_value.md
 Run   : python src/adjustability_value.py
@@ -36,6 +37,7 @@ KEY  = ["batter_id", "batter_stand"]
 SEASONS    = [2024, 2025]
 MIN_SWINGS = 400
 MATCH_MIN  = 3
+TREATMENTS = ["adjustability", "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]
 N_FOLDS    = 5
 SEED       = 42
 
@@ -132,7 +134,7 @@ def build_unit_table(s):
     ns = s.groupby(KEY).size().rename("n_swings").reset_index()
 
     adj = pd.read_parquet(DATA / "adjustability.parquet",
-                          columns=KEY + ["adjustability"])
+                          columns=KEY + TREATMENTS)
 
     unit = (adj.merge(ns, on=KEY)
                .merge(swing_plus, on=KEY)
@@ -147,7 +149,7 @@ def build_unit_table(s):
 def aggregate_to_batter(unit):
     """Usage-weight (batter, stand) → batter level for season-wide DML."""
     u = unit.copy()
-    agg_cols = ["adjustability"] + _CONF_WTAVG
+    agg_cols = TREATMENTS + _CONF_WTAVG
     for c in agg_cols:
         u[c] = u[c] * u["n_swings"]
     g = u.groupby("batter_id").agg(
@@ -224,36 +226,30 @@ def main():
     ]
 
     rows = []
-    for scope, df, outcome, label in specs:
-        print(f"DML: {scope} / {outcome}...")
-        theta, se, t, p, n, r2_T, r2_Y = dml(df, "adjustability", outcome)
-        rows.append(dict(outcome=label, scope=scope, n=n,
-                         theta=round(theta, 4), se=round(se, 4),
-                         ci_lo=round(theta - 1.96 * se, 4),
-                         ci_hi=round(theta + 1.96 * se, 4),
-                         t=round(t, 2), p=round(p, 4),
-                         r2_T=round(r2_T, 3), r2_Y=round(r2_Y, 3)))
-        print(f"  θ={theta:+.4f}  SE={se:.4f}  t={t:.2f}  p={p:.4f}"
-              f"  r2_T={r2_T:.3f}  r2_Y={r2_Y:.3f}")
+    for treatment in TREATMENTS:
+        for scope, df, outcome, label in specs:
+            print(f"DML: {treatment} / {scope} / {outcome}...")
+            theta, se, t, p, n, r2_T, r2_Y = dml(df, treatment, outcome)
+            rows.append(dict(treatment=treatment, outcome=label, scope=scope, n=n,
+                             theta=round(theta, 4), se=round(se, 4),
+                             ci_lo=round(theta - 1.96 * se, 4),
+                             ci_hi=round(theta + 1.96 * se, 4),
+                             t=round(t, 2), p=round(p, 4),
+                             r2_T=round(r2_T, 3), r2_Y=round(r2_Y, 3)))
+            print(f"  θ={theta:+.4f}  SE={se:.4f}  t={t:.2f}  p={p:.4f}"
+                  f"  r2_T={r2_T:.3f}  r2_Y={r2_Y:.3f}")
 
     tab = pd.DataFrame(rows)
 
     L = [
         "# Adjustability value — DML causal estimates\n",
-        f"**Treatment:** `adjustability` (raw v4 composite, 2024-25, ≥{MIN_SWINGS} swings). "
-        "Standardized before DML; θ is a standardized partial effect.\n",
+        f"Each of {len(TREATMENTS)} treatments run as a separate DML "
+        f"(2024-25, ≥{MIN_SWINGS} swings). Standardized; θ is a standardized partial effect.\n",
         "**Method:** Robinson (1988) partial linear model. XGBoost nuisance models "
-        f"({N_FOLDS}-fold cross-fitting) residualize both treatment and outcome on confounders. "
-        "θ = OLS(Y_resid ~ T_resid). SE from influence-function sandwich estimator.\n",
-        "**Confounders:** swing quality (swing_plus), log playing time, repertoire width, "
-        "batter handedness, pitcher quality faced (swing-weighted mean pitcher Δrun-exp), "
-        "whiff rate.\n",
-        "**Nuisance R²:** r2_T = XGBoost R² predicting adjustability from confounders "
-        "(low → confounders don't explain adjustability → DML ≈ naive OLS). "
-        "r2_Y = XGBoost R² predicting outcome from confounders.\n",
-        "**Caveat:** conditional unconfoundedness assumed. Unmeasured confounders "
-        "(true plate discipline, pitcher sequencing, role incentives) remain a threat. "
-        "Interpret as a best observational causal estimate.\n",
+        f"({N_FOLDS}-fold cross-fitting). SE from influence-function sandwich estimator.\n",
+        "**Confounders (same for all treatments):** swing quality (swing_plus), log playing time, "
+        "repertoire width, batter handedness, pitcher quality faced, whiff rate.\n",
+        "**Caveat:** conditional unconfoundedness assumed. Unmeasured confounders remain a threat.\n",
         "## Results\n",
         tab.to_markdown(index=False),
         "",
