@@ -279,6 +279,33 @@ if (file.exists("data/twostrike_penalties.parquet")) {
                    "**ADJValue+ Leaderboard — Worst Performers**",
                    sprintf("Least value from adjustability  &middot;  same pool (n=%d)  &middot;  color = ADJValue+", n_pool),
                    fig_path("adjustability_value_bottom_gt.png"), footnote = val_foot, width = 950)
+
+  # ── Residuals: high Adj+ / low ADJValue+ and low Adj+ / high ADJValue+ (top 5 each) ────────────
+  val_fit  <- lm(ADJValue ~ AdjPlus, data = val_raw)
+  val_res  <- val_raw |> mutate(ADJResid = round(residuals(val_fit), 1))
+
+  pal_resid   <- col_numeric(PAL_COLS, domain = range(val_res$ADJResid))
+  resid_cols  <- c("Rank", "batter_id", "label", "batter_stand", "AdjPlus", "ADJValue", "ADJResid", "MatchedRV", "Whiff2K", "SwingPlus")
+  resid_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
+                       AdjPlus = "Adjustability+", ADJValue = "ADJValue+", ADJResid = "Residual",
+                       MatchedRV = "2K Δ run value", Whiff2K = "2K Δ whiff", SwingPlus = "Swing+")
+  resid_align  <- c("Rank", "batter_stand", "AdjPlus", "ADJValue", "ADJResid", "MatchedRV", "Whiff2K", "SwingPlus")
+  resid_foot   <- paste0("Residual = actual ADJValue+ minus expected from linear fit on Adjustability+. n=", n_pool, " pool.")
+
+  high_adj_low_val <- val_res |> arrange(ADJResid)       |> head(5) |> mutate(Rank = row_number())
+  low_adj_high_val <- val_res |> arrange(desc(ADJResid)) |> head(5) |> mutate(Rank = row_number())
+
+  make_leaderboard(high_adj_low_val |> select(all_of(resid_cols)),
+                   "ADJResid", pal_resid, resid_labels, resid_align,
+                   "**High Adjustability+, Low ADJValue+**",
+                   sprintf("Skilled adjusters not translating to outcomes  &middot;  n=%d pool", n_pool),
+                   fig_path("adjustability_resid_high_adj_low_val_gt.png"), footnote = resid_foot, width = 1000)
+
+  make_leaderboard(low_adj_high_val |> select(all_of(resid_cols)),
+                   "ADJResid", pal_resid, resid_labels, resid_align,
+                   "**Low Adjustability+, High ADJValue+**",
+                   sprintf("Two-strike outcomes without the measured skill  &middot;  n=%d pool", n_pool),
+                   fig_path("adjustability_resid_low_adj_high_val_gt.png"), footnote = resid_foot, width = 1000)
 } else {
   cat("Skipping ADJValue leaderboard: data/twostrike_penalties.parquet not found.\n",
       "Run the ‘Two-strike outcome gap’ cell in adjustability_results.ipynb first.\n")
