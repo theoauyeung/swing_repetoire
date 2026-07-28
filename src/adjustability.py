@@ -35,6 +35,7 @@ Output: data/adjustability.parquet   (headline column: adjustability)
 Run:  python src/adjustability.py
 """
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
 
@@ -42,6 +43,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 KEY = ["batter_id", "batter_stand"]
 SEASONS = [2024, 2025]
+REF_PATH = ROOT / "src" / "adjustability_reference.json"
+REF_SEASONS = [2024, 2025]
 MIN_SWINGS = 400
 DIALS = ["bat_speed", "swing_length", "swing_path_tilt"]
 PITCH_GROUP = {"FF": "FB", "SI": "FB", "FC": "FB", "SL": "brk", "CU": "brk", "KC": "brk", "ST": "brk",
@@ -82,6 +85,26 @@ def dummies(g, cols):
     return pd.get_dummies(g[cols].astype(str), drop_first=True).to_numpy(float)
 
 
+def resolve_reference(out):
+    """Return (mean, std, sorted_array) using the frozen 2024-25 baseline.
+
+    Pegging the scale to a fixed 2024-25 baseline keeps adjustability_plus / adjustability_pctile
+    comparable across seasons — same approach as repertoire_reference.json. Delete the file to re-peg.
+    Holds only league-level aggregates (no PII) so it lives in-repo and is committed."""
+    if REF_PATH.exists():
+        ref = json.loads(REF_PATH.read_text(encoding="utf-8"))
+        return ref["adjustability_mean"], ref["adjustability_std"], np.array(ref["adjustability_sorted"], float)
+    mean_ = float(out["adjustability"].mean())
+    std_  = float(out["adjustability"].std())
+    sorted_ = [round(float(v), 4) for v in sorted(out["adjustability"])]
+    ref = {"reference_seasons": REF_SEASONS, "n_reference_units": len(out),
+           "adjustability_mean": mean_, "adjustability_std": std_,
+           "adjustability_sorted": sorted_}
+    REF_PATH.write_text(json.dumps(ref, indent=2), encoding="utf-8")
+    print(f"Built + froze adjustability reference -> {REF_PATH} (seasons {REF_SEASONS}, {len(out)} units)")
+    return mean_, std_, np.array(sorted_, float)
+
+
 def main():
     df = add_context(pd.read_parquet(
         DATA / "swings_model.parquet",
@@ -119,7 +142,12 @@ def main():
         rows.append(row)
 
     out = pd.DataFrame(rows).sort_values("adjustability", ascending=False).reset_index(drop=True)
-    out["adjustability_pctile"] = (out["adjustability"].rank(pct=True) * 100).round(1)
+    mean_, std_, sorted_ = resolve_reference(out)
+    z = (out["adjustability"] - mean_) / std_
+    out["adjustability_plus"] = (50 + 10 * z).clip(0, 100).round(1)
+    out["adjustability_pctile"] = (
+        np.searchsorted(sorted_, out["adjustability"].to_numpy(), side="right")
+        / len(sorted_) * 100).round(1)
     out.to_parquet(DATA / "adjustability.parquet", index=False)
     print(f"{len(out)} hitters, >= {MIN_SWINGS} swings, {SEASONS}")
     print(f"adjustability: mean {out.adjustability.mean():.3f}, median {out.adjustability.median():.3f}, "
