@@ -27,9 +27,9 @@ python src/xRV_model.py      # per-swing xRV → xrv_swings.parquet
 python src/interpret.py      # archetype lexicon → shape_archetypes
 python src/cards.py          # swing ID cards → shape_cards.parquet
 python src/repertoire.py     # Repertoire+ → repertoire_scores.parquet
-python src/adjustability.py  # adjustability → adjustability.parquet
-python src/payoff.py         # payoff regression → results/payoff.md
-Rscript src/leaderboard_table.R  # leaderboard PNGs via gt + mlbplotR
+python src/adjustability.py       # adjustability → adjustability.parquet
+python src/adjustability_value.py # DML value test → results/adjustability_value.md
+Rscript src/leaderboard_table.R   # leaderboard PNGs via gt + mlbplotR
 ```
 
 Notebooks (`src/cluster_results.ipynb`, `src/swing+_results.ipynb`, `src/adjustability_results.ipynb`) save figures as PNGs into `results/plots/` subfolders. Tables render via `dataframe_image` (matplotlib backend).
