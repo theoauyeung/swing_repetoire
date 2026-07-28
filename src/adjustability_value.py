@@ -13,7 +13,7 @@ Confounders: swing_plus, log(n_swings), repertoire_plus, batter handedness,
              whiff rate (contact-skill proxy).
 Outcomes  : season-wide (rv_per_swing, woba_lw) and two-strike (two_strike_rv_delta, two_strike_whiff_delta).
 
-Method: Robinson (1988) partial linear model. XGBoost nuisance models (5-fold cross-fitting)
+Method: partial linear model. XGBoost nuisance models (5-fold cross-fitting)
 residualize both treatment and outcome on confounders independently. θ = OLS(Y_resid ~ T_resid).
 Treatment and outcome both standardized so θ is a standardized partial effect. SE from the
 DML influence-function sandwich estimator — no bootstrap required.
@@ -63,6 +63,25 @@ _CONF_WTAVG = ["swing_plus", "repertoire_plus", "stand_L", "pitcher_quality", "w
 CONFOUNDER_COLS = _CONF_WTAVG + ["logn"]
 
 
+def _two_strike_penalty(group, feature):
+    """Matched two-strike minus early-count difference for one batter's swings."""
+    weighted_sum = 0.0
+    total_two_strike_swings = 0.0
+
+    for _, zone_group in group.groupby("zone_pitch", sort=False):
+        two_strike  = zone_group.loc[zone_group["twoK"] == 1, feature]
+        early_count = zone_group.loc[zone_group["twoK"] == 0, feature]
+
+        if len(two_strike) >= MATCH_MIN and len(early_count) >= MATCH_MIN:
+            diff = two_strike.mean() - early_count.mean()
+            weighted_sum += len(two_strike) * diff
+            total_two_strike_swings += len(two_strike)
+
+    if total_two_strike_swings == 0:
+        return np.nan
+    return weighted_sum / total_two_strike_swings
+
+
 def dml(d, treatment, outcome):
     """
     5-fold cross-fitted DML. Treatment and outcome standardized → θ is a standardized
@@ -72,33 +91,43 @@ def dml(d, treatment, outcome):
     d = d.dropna(subset=[treatment, outcome] + CONFOUNDER_COLS).copy().reset_index(drop=True)
     n = len(d)
 
+    # Standardize to mean=0, SD=1 so θ is comparable across outcomes
     T_raw = d[treatment].to_numpy(float)
     Y_raw = d[outcome].to_numpy(float)
     T = (T_raw - T_raw.mean()) / T_raw.std()
     Y = (Y_raw - Y_raw.mean()) / Y_raw.std()
     X = d[CONFOUNDER_COLS].to_numpy(float)
 
+    # Cross-fitting: fit separate models for T and Y on confounders, save residuals
     T_resid = np.zeros(n)
     Y_resid = np.zeros(n)
 
     kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
-    for tr_idx, val_idx in kf.split(X):
-        m_t = XGBRegressor(**XGB_PARAMS)
-        m_t.fit(X[tr_idx], T[tr_idx])
-        T_resid[val_idx] = T[val_idx] - m_t.predict(X[val_idx])
+    for train_idx, val_idx in kf.split(X):
+        model_T = XGBRegressor(**XGB_PARAMS)
+        model_T.fit(X[train_idx], T[train_idx])
+        T_resid[val_idx] = T[val_idx] - model_T.predict(X[val_idx])
 
-        m_y = XGBRegressor(**XGB_PARAMS)
-        m_y.fit(X[tr_idx], Y[tr_idx])
-        Y_resid[val_idx] = Y[val_idx] - m_y.predict(X[val_idx])
+        model_Y = XGBRegressor(**XGB_PARAMS)
+        model_Y.fit(X[train_idx], Y[train_idx])
+        Y_resid[val_idx] = Y[val_idx] - model_Y.predict(X[val_idx])
 
-    theta  = float(np.dot(T_resid, Y_resid) / np.dot(T_resid, T_resid))
-    psi    = T_resid * (Y_resid - theta * T_resid)
-    var_th = float(np.mean(psi ** 2)) / (float(np.mean(T_resid ** 2)) ** 2) / n
-    se     = float(np.sqrt(max(var_th, 0.0)))
-    t      = theta / se if se > 0 else np.nan
-    p      = float(2 * stats.t.sf(abs(t), df=n - len(CONFOUNDER_COLS) - 1)) if se > 0 else np.nan
-    r2_T   = float(1 - np.sum(T_resid**2) / np.sum((T - T.mean())**2))
-    r2_Y   = float(1 - np.sum(Y_resid**2) / np.sum((Y - Y.mean())**2))
+    # OLS: regress Y residuals on T residuals
+    theta = float(np.dot(T_resid, Y_resid) / np.dot(T_resid, T_resid))
+
+    # Sandwich SE via influence function
+    influence_scores  = T_resid * (Y_resid - theta * T_resid)
+    mean_sq_influence = float(np.mean(influence_scores ** 2))
+    mean_sq_T_resid   = float(np.mean(T_resid ** 2))
+    var_theta = mean_sq_influence / (mean_sq_T_resid ** 2) / n
+    se = float(np.sqrt(max(var_theta, 0.0)))
+
+    t = theta / se if se > 0 else np.nan
+    p = float(2 * stats.t.sf(abs(t), df=n - len(CONFOUNDER_COLS) - 1)) if se > 0 else np.nan
+
+    r2_T = float(1 - np.sum(T_resid**2) / np.sum((T - T.mean())**2))
+    r2_Y = float(1 - np.sum(Y_resid**2) / np.sum((Y - Y.mean())**2))
+
     return theta, se, t, p, n, r2_T, r2_Y
 
 
@@ -112,7 +141,6 @@ def load_swings():
 
 def build_unit_table(s):
     """Per-(batter, stand) treatment + confounder table."""
-    # Swing quality
     xrv = pd.read_parquet(DATA / "xrv_swings.parquet",
                           columns=KEY + ["game_year", "xrv_grade"])
     swing_plus = (xrv[xrv.game_year.isin(SEASONS)]
@@ -141,25 +169,28 @@ def build_unit_table(s):
                .merge(rep, on=KEY)
                .merge(pq, on=KEY)
                .merge(wr, on=KEY))
-    unit["logn"]   = np.log(unit["n_swings"])
+    unit["logn"]    = np.log(unit["n_swings"])
     unit["stand_L"] = (unit["batter_stand"] == "L").astype(float)
     return unit[unit["n_swings"] >= MIN_SWINGS].copy()
 
 
 def aggregate_to_batter(unit):
     """Usage-weight (batter, stand) → batter level for season-wide DML."""
-    u = unit.copy()
+    # Weighted average: multiply each column by swing count, sum across stances, then divide.
+    # This collapses switch hitters (who have two rows) into one batter-level row.
     agg_cols = TREATMENTS + _CONF_WTAVG
-    for c in agg_cols:
-        u[c] = u[c] * u["n_swings"]
-    g = u.groupby("batter_id").agg(
-        n_swings=("n_swings", "sum"),
-        **{c: (c, "sum") for c in agg_cols},
-    ).reset_index()
-    for c in agg_cols:
-        g[c] /= g["n_swings"]
-    g["logn"] = np.log(g["n_swings"])
-    return g
+
+    weighted = unit.copy()
+    for col in agg_cols:
+        weighted[col] = weighted[col] * weighted["n_swings"]
+
+    grouped = weighted.groupby("batter_id")[["n_swings"] + agg_cols].sum().reset_index()
+
+    for col in agg_cols:
+        grouped[col] = grouped[col] / grouped["n_swings"]
+
+    grouped["logn"] = np.log(grouped["n_swings"])
+    return grouped
 
 
 def season_outcomes(s):
@@ -187,18 +218,12 @@ def twostrike_outcomes(s):
     for (bid, stand), g in s2.groupby(KEY, sort=False):
         if len(g) < MIN_SWINGS:
             continue
-        def matched(feat, _g=g):
-            num = den = 0.0
-            for _, seg in _g.groupby("zone_pitch", sort=False):
-                a = seg.loc[seg.twoK == 1, feat]
-                b = seg.loc[seg.twoK == 0, feat]
-                if len(a) >= MATCH_MIN and len(b) >= MATCH_MIN:
-                    num += len(a) * (a.mean() - b.mean())
-                    den += len(a)
-            return num / den if den > 0 else np.nan
-        rows.append({"batter_id": bid, "batter_stand": stand,
-                     "two_strike_rv_delta": matched("delta_run_exp"),
-                     "two_strike_whiff_delta": matched("is_whiff")})
+        rows.append({
+            "batter_id":              bid,
+            "batter_stand":           stand,
+            "two_strike_rv_delta":    _two_strike_penalty(g, "delta_run_exp"),
+            "two_strike_whiff_delta": _two_strike_penalty(g, "is_whiff"),
+        })
     return pd.DataFrame(rows)
 
 
@@ -219,10 +244,10 @@ def main():
     print(f"Season n={len(df_season)}  |  Two-strike n={len(df_2k)}")
 
     specs = [
-        ("Season-wide",  df_season, "rv_per_swing",  "Run value per swing"),
-        ("Season-wide",  df_season, "woba_lw",        "wOBA (swing-ending PAs)"),
-        ("Two-strike",   df_2k,     "two_strike_rv_delta",     "Matched 2K run value"),
-        ("Two-strike",   df_2k,     "two_strike_whiff_delta",  "Matched 2K whiff rate"),
+        ("Season-wide",  df_season, "rv_per_swing",           "Run value per swing"),
+        ("Season-wide",  df_season, "woba_lw",                "wOBA (swing-ending PAs)"),
+        ("Two-strike",   df_2k,     "two_strike_rv_delta",    "Matched 2K run value"),
+        ("Two-strike",   df_2k,     "two_strike_whiff_delta", "Matched 2K whiff rate"),
     ]
 
     rows = []
@@ -230,18 +255,20 @@ def main():
         for scope, df, outcome, label in specs:
             print(f"DML: {treatment} / {scope} / {outcome}...")
             theta, se, t, p, n, r2_T, r2_Y = dml(df, treatment, outcome)
-            rows.append(dict(treatment=treatment, outcome=label, scope=scope, n=n,
-                             theta=round(theta, 4), se=round(se, 4),
-                             ci_lo=round(theta - 1.96 * se, 4),
-                             ci_hi=round(theta + 1.96 * se, 4),
-                             t=round(t, 2), p=round(p, 4),
-                             r2_T=round(r2_T, 3), r2_Y=round(r2_Y, 3)))
+            rows.append(dict(
+                treatment=treatment, outcome=label, scope=scope, n=n,
+                theta=round(theta, 4), se=round(se, 4),
+                ci_lo=round(theta - 1.96 * se, 4),
+                ci_hi=round(theta + 1.96 * se, 4),
+                t=round(t, 2), p=round(p, 4),
+                r2_T=round(r2_T, 3), r2_Y=round(r2_Y, 3),
+            ))
             print(f"  θ={theta:+.4f}  SE={se:.4f}  t={t:.2f}  p={p:.4f}"
                   f"  r2_T={r2_T:.3f}  r2_Y={r2_Y:.3f}")
 
     tab = pd.DataFrame(rows)
 
-    L = [
+    lines = [
         "# Adjustability value — DML causal estimates\n",
         f"Each of {len(TREATMENTS)} treatments run as a separate DML "
         f"(2024-25, ≥{MIN_SWINGS} swings). Standardized; θ is a standardized partial effect.\n",
@@ -256,7 +283,7 @@ def main():
     ]
 
     out = ROOT / "results" / "adjustability_value.md"
-    out.write_text("\n".join(L), encoding="utf-8")
+    out.write_text("\n".join(lines), encoding="utf-8")
     print(f"\nwrote {out}")
 
 

@@ -1,7 +1,7 @@
 # Resuming on a new machine
 
 The **code** is on GitHub. The **data** (`data/`, ~273 MB — including the raw DB extract
-`swings_2024_2026_mlb.parquet`) and **internal docs** (`CLAUDE.md`, `docs/`, `results/payoff.md`) are
+`swings_2024_2026_mlb.parquet`) and **internal docs** (`CLAUDE.md`, `docs/`, `results/adjustability_value.md`) are
 gitignored, so they ship separately in a **resume bundle** — `swing-repertoire-resume-<date>.zip`,
 stored in **Driveline OneDrive** (work account `theo.an-yeung@drivelinebaseball.com`). Steps below are
 written for **macOS**.
@@ -17,7 +17,7 @@ written for **macOS**.
    git clone https://github.com/theoauyeung/swing_repetoire.git
    cd swing_repetoire
    ```
-3. **Unpack the bundle into the repo root** so `data/`, `CLAUDE.md`, `docs/`, and `results/payoff.md`
+3. **Unpack the bundle into the repo root** so `data/`, `CLAUDE.md`, `docs/`, and `results/adjustability_value.md`
    land in place:
    ```bash
    unzip ~/Downloads/swing-repertoire-resume-*.zip -d .
@@ -32,7 +32,7 @@ written for **macOS**.
 5. **Verify** (env active, from repo root)
    ```bash
    python src/adjustability.py             # -> data/adjustability.parquet
-   python src/payoff.py                    # -> results/payoff.md
+   python src/adjustability_value.py      # -> results/adjustability_value.md
    ```
    then open `src/adjustability_results.ipynb` on the **Python (driveline)** kernel and Run All.
 

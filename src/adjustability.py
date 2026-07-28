@@ -47,8 +47,11 @@ REF_PATH = ROOT / "src" / "adjustability_reference.json"
 REF_SEASONS = [2024, 2025]
 MIN_SWINGS = 400
 DIALS = ["bat_speed", "swing_length", "swing_path_tilt"]
-PITCH_GROUP = {"FF": "FB", "SI": "FB", "FC": "FB", "SL": "brk", "CU": "brk", "KC": "brk", "ST": "brk",
-               "SV": "brk", "SC": "brk", "KN": "brk", "CH": "off", "FS": "off", "FO": "off"}
+PITCH_GROUP = {
+    "FF": "FB", "SI": "FB", "FC": "FB",
+    "SL": "brk", "CU": "brk", "KC": "brk", "ST": "brk", "SV": "brk", "SC": "brk", "KN": "brk",
+    "CH": "off", "FS": "off", "FO": "off",
+}
 
 
 def add_context(df):
@@ -57,35 +60,59 @@ def add_context(df):
     df["pz"] = (df["plate_z"] - df["sz_bot"]) / (df["sz_top"] - df["sz_bot"])
     df = df.dropna(subset=["px", "pz"] + DIALS).copy()
     df["pitch_group"] = df["pitch_type"].map(PITCH_GROUP).fillna("other")
-    on1, on2, on3 = df["on_1b_id"].notna(), df["on_2b_id"].notna(), df["on_3b_id"].notna()
-    df["base_state"] = np.where(on2 | on3, "risp", np.where(on1, "on1", "empty"))
+    on_first  = df["on_1b_id"].notna()
+    on_second = df["on_2b_id"].notna()
+    on_third  = df["on_3b_id"].notna()
+    df["base_state"] = np.where(on_second | on_third, "risp", np.where(on_first, "on1", "empty"))
     return df
 
 
-def location_design(g):
+def location_design(group):
     """Pitch-location nuisance surface: intercept + linear + quadratic + interaction in (px, pz)."""
-    px, pz = g.px.to_numpy(float), g.pz.to_numpy(float)
-    return np.column_stack([np.ones(len(g)), px, pz, px ** 2, pz ** 2, px * pz])
+    px = group.px.to_numpy(float)
+    pz = group.pz.to_numpy(float)
+    return np.column_stack([np.ones(len(group)), px, pz, px ** 2, pz ** 2, px * pz])
 
 
-def adj_r2(y, X):
+def adjusted_r_squared(y, X):
     """Adjusted R^2 of y on design X (X INCLUDES its own intercept column). Not clipped here — the
-    caller differences two adj_r2's and floors the increment."""
-    n, k = X.shape
-    b, *_ = np.linalg.lstsq(X, y, rcond=None)
-    sse = float(((y - X @ b) ** 2).sum())
-    sst = float(((y - y.mean()) ** 2).sum())
-    p = k - 1                                     # predictors excluding the intercept
-    if sst <= 0 or n - p - 1 <= 0:
+    caller differences two adjusted_r_squared's and floors the increment."""
+    n_obs, n_cols = X.shape
+    n_predictors = n_cols - 1  # predictors excluding the intercept
+    coefficients, *_ = np.linalg.lstsq(X, y, rcond=None)
+    sum_sq_error = float(((y - X @ coefficients) ** 2).sum())
+    sum_sq_total = float(((y - y.mean()) ** 2).sum())
+    if sum_sq_total <= 0 or n_obs - n_predictors - 1 <= 0:
         return 0.0
-    return 1 - (sse / sst) * (n - 1) / (n - p - 1)
+    # Penalty adjusts for the number of predictors so adding useless ones doesn't inflate R^2
+    penalty = (n_obs - 1) / (n_obs - n_predictors - 1)
+    return 1 - (sum_sq_error / sum_sq_total) * penalty
 
 
-def dummies(g, cols):
-    return pd.get_dummies(g[cols].astype(str), drop_first=True).to_numpy(float)
+def situation_dummies(group, cols):
+    return pd.get_dummies(group[cols].astype(str), drop_first=True).to_numpy(float)
 
 
-def resolve_reference(out):
+def build_situation_design(location_matrix, group, situation_cols):
+    """Stack location surface with situation dummy columns. Returns just location if cols is empty."""
+    if not situation_cols:
+        return location_matrix
+    return np.column_stack([location_matrix, situation_dummies(group, situation_cols)])
+
+
+def dial_r_squared_with_situation(location_matrix, group, dial_outcomes, situation_cols):
+    """Per-dial adjusted R^2 of [location + these situation cols]."""
+    X = build_situation_design(location_matrix, group, situation_cols)
+    return {dial: adjusted_r_squared(dial_outcomes[dial], X) for dial in DIALS}
+
+
+def mean_r_squared_gain(full_model_r_squared, baseline_r_squared):
+    """Mean over dials of (full model - baseline model) adjusted R^2, each floored at 0."""
+    gains = [max(0.0, full_model_r_squared[dial] - baseline_r_squared[dial]) for dial in DIALS]
+    return float(np.mean(gains))
+
+
+def resolve_reference(scores_df):
     """Return (mean, std, sorted_array) using the frozen 2024-25 baseline.
 
     Pegging the scale to a fixed 2024-25 baseline keeps adjustability_plus / adjustability_pctile
@@ -93,16 +120,23 @@ def resolve_reference(out):
     Holds only league-level aggregates (no PII) so it lives in-repo and is committed."""
     if REF_PATH.exists():
         ref = json.loads(REF_PATH.read_text(encoding="utf-8"))
-        return ref["adjustability_mean"], ref["adjustability_std"], np.array(ref["adjustability_sorted"], float)
-    mean_ = float(out["adjustability"].mean())
-    std_  = float(out["adjustability"].std())
-    sorted_ = [round(float(v), 4) for v in sorted(out["adjustability"])]
-    ref = {"reference_seasons": REF_SEASONS, "n_reference_units": len(out),
-           "adjustability_mean": mean_, "adjustability_std": std_,
-           "adjustability_sorted": sorted_}
+        baseline_mean   = ref["adjustability_mean"]
+        baseline_std    = ref["adjustability_std"]
+        baseline_sorted = np.array(ref["adjustability_sorted"], float)
+        return baseline_mean, baseline_std, baseline_sorted
+    baseline_mean   = float(scores_df["adjustability"].mean())
+    baseline_std    = float(scores_df["adjustability"].std())
+    baseline_sorted = [round(float(v), 4) for v in sorted(scores_df["adjustability"])]
+    ref = {
+        "reference_seasons":    REF_SEASONS,
+        "n_reference_units":    len(scores_df),
+        "adjustability_mean":   baseline_mean,
+        "adjustability_std":    baseline_std,
+        "adjustability_sorted": baseline_sorted,
+    }
     REF_PATH.write_text(json.dumps(ref, indent=2), encoding="utf-8")
-    print(f"Built + froze adjustability reference -> {REF_PATH} (seasons {REF_SEASONS}, {len(out)} units)")
-    return mean_, std_, np.array(sorted_, float)
+    print(f"Built + froze adjustability reference -> {REF_PATH} (seasons {REF_SEASONS}, {len(scores_df)} units)")
+    return baseline_mean, baseline_std, np.array(baseline_sorted, float)
 
 
 def main():
@@ -111,53 +145,67 @@ def main():
         columns=["game_year", "batter_full_name"] + KEY + ["balls", "strikes", "outs_when_up",
                  "plate_x", "plate_z", "sz_top", "sz_bot", "pitch_type", "pitcher_throws",
                  "on_1b_id", "on_2b_id", "on_3b_id"] + DIALS).query("game_year in @SEASONS"))
-    axes = {"count": ["balls", "strikes"], "gamestate": ["base_state", "outs_when_up"],
-            "pitch": ["pitch_group"], "platoon": ["pitcher_throws"]}
-    all_cols = [c for cols in axes.values() for c in cols]
+
+    axes = {
+        "count":     ["balls", "strikes"],
+        "gamestate": ["base_state", "outs_when_up"],
+        "pitch":     ["pitch_group"],
+        "platoon":   ["pitcher_throws"],
+    }
+    all_situation_cols = [col for axis_cols in axes.values() for col in axis_cols]
 
     rows = []
-    for (bid, stand), g in df.groupby(KEY, sort=False):
-        if len(g) < MIN_SWINGS:
+    for (batter_id, stand), group in df.groupby(KEY, sort=False):
+        if len(group) < MIN_SWINGS:
             continue
-        L = location_design(g)
-        ys = {d: g[d].to_numpy(float) for d in DIALS}
+        location_matrix = location_design(group)
+        dial_outcomes   = {dial: group[dial].to_numpy(float) for dial in DIALS}
 
-        def adjr2_with(cols):
-            """Per-dial adjusted R^2 of [location + these situation cols] (location-only if cols empty)."""
-            X = np.column_stack([L, dummies(g, cols)]) if cols else L
-            return {d: adj_r2(ys[d], X) for d in DIALS}
-
-        a_full = adjr2_with(all_cols)
-
-        def mean_gain(baseline):
-            """Mean over dials of (full model - baseline model) adjusted R^2, each floored at 0."""
-            return float(np.mean([max(0.0, a_full[d] - baseline[d]) for d in DIALS]))
+        full_model_r_squared = dial_r_squared_with_situation(
+            location_matrix, group, dial_outcomes, all_situation_cols
+        )
+        location_only_r_squared = dial_r_squared_with_situation(
+            location_matrix, group, dial_outcomes, []
+        )
 
         # headline = whole situation over location-only; per-axis = unique add net of location + the OTHER axes
-        row = {"batter_id": bid, "batter_stand": stand, "label": g["batter_full_name"].iloc[0],
-               "n_swings": len(g), "adjustability": round(mean_gain(adjr2_with([])), 4)}
-        for ax, cols in axes.items():
-            others = [c for a, cc in axes.items() if a != ax for c in cc]
-            row[f"adj_{ax}"] = round(mean_gain(adjr2_with(others)), 4)
+        row = {
+            "batter_id":     batter_id,
+            "batter_stand":  stand,
+            "label":         group["batter_full_name"].iloc[0],
+            "n_swings":      len(group),
+            "adjustability": round(mean_r_squared_gain(full_model_r_squared, location_only_r_squared), 4),
+        }
+        for axis_name, axis_cols in axes.items():
+            other_situation_cols = [col for other_axis, other_cols in axes.items()
+                                    if other_axis != axis_name for col in other_cols]
+            baseline_r_squared = dial_r_squared_with_situation(
+                location_matrix, group, dial_outcomes, other_situation_cols
+            )
+            row[f"adj_{axis_name}"] = round(mean_r_squared_gain(full_model_r_squared, baseline_r_squared), 4)
         rows.append(row)
 
-    out = pd.DataFrame(rows).sort_values("adjustability", ascending=False).reset_index(drop=True)
-    mean_, std_, sorted_ = resolve_reference(out)
-    z = (out["adjustability"] - mean_) / std_
-    out["adjustability_plus"] = (50 + 10 * z).clip(0, 100).round(1)
-    out["adjustability_pctile"] = (
-        np.searchsorted(sorted_, out["adjustability"].to_numpy(), side="right")
-        / len(sorted_) * 100).round(1)
-    out.to_parquet(DATA / "adjustability.parquet", index=False)
-    print(f"{len(out)} hitters, >= {MIN_SWINGS} swings, {SEASONS}")
-    print(f"adjustability: mean {out.adjustability.mean():.3f}, median {out.adjustability.median():.3f}, "
-          f"max {out.adjustability.max():.3f}")
-    print(f"per-axis means -> count {out.adj_count.mean():.3f}  gamestate {out.adj_gamestate.mean():.3f}  "
-          f"pitch {out.adj_pitch.mean():.3f}  platoon {out.adj_platoon.mean():.3f}")
-    print("\ntop 8:\n", out.head(8)[["label", "batter_stand", "n_swings", "adjustability",
-                                      "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]].to_string(index=False))
-    print("\nbottom 5:\n", out.tail(5)[["label", "batter_stand", "adjustability",
-                                        "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]].to_string(index=False))
+    scores_df = pd.DataFrame(rows).sort_values("adjustability", ascending=False).reset_index(drop=True)
+    baseline_mean, baseline_std, baseline_sorted = resolve_reference(scores_df)
+
+    # Scale to 50 + 10·z, clipped to [0, 100], matching the Swing+ / Repertoire+ convention
+    z_scores = (scores_df["adjustability"] - baseline_mean) / baseline_std
+    scores_df["adjustability_plus"] = (50 + 10 * z_scores).clip(0, 100).round(1)
+    scores_df["adjustability_pctile"] = (
+        np.searchsorted(baseline_sorted, scores_df["adjustability"].to_numpy(), side="right")
+        / len(baseline_sorted) * 100
+    ).round(1)
+
+    scores_df.to_parquet(DATA / "adjustability.parquet", index=False)
+    print(f"{len(scores_df)} hitters, >= {MIN_SWINGS} swings, {SEASONS}")
+    print(f"adjustability: mean {scores_df.adjustability.mean():.3f}, median {scores_df.adjustability.median():.3f}, "
+          f"max {scores_df.adjustability.max():.3f}")
+    print(f"per-axis means -> count {scores_df.adj_count.mean():.3f}  gamestate {scores_df.adj_gamestate.mean():.3f}  "
+          f"pitch {scores_df.adj_pitch.mean():.3f}  platoon {scores_df.adj_platoon.mean():.3f}")
+    print("\ntop 8:\n", scores_df.head(8)[["label", "batter_stand", "n_swings", "adjustability",
+                                            "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]].to_string(index=False))
+    print("\nbottom 5:\n", scores_df.tail(5)[["label", "batter_stand", "adjustability",
+                                              "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]].to_string(index=False))
 
 
 if __name__ == "__main__":

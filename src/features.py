@@ -43,51 +43,63 @@ KEEP = [
 
 
 def main():
-    df = pd.read_parquet(DATA / "swings_2024_2026_mlb.parquet")
-    n0 = len(df)
+    all_swings = pd.read_parquet(DATA / "swings_2024_2026_mlb.parquet")
+    total_swing_count = len(all_swings)
 
-    # filter funnel
-    tracked = df["bat_speed"].notna() & df[SHAPE].notna().all(axis=1)
-    d1 = df[tracked]
-    d2 = d1[d1["is_bunt"] == 0]
-    d3 = d2[d2["bat_speed"] >= BAT_SPEED_MIN]
-    ok_angle = (d3["horz_attack_angle"].abs() <= HORZ_ABS_MAX) & \
-               d3["vert_attack_angle"].between(*VERT_BOUNDS)
-    d4 = d3[ok_angle].copy()
+    # filter funnel — each step narrows the set; names reflect what survived
+    all_shape_features_present = (
+        all_swings["bat_speed"].notna()
+        & all_swings[SHAPE].notna().all(axis=1)
+    )
+    bat_tracked_swings = all_swings[all_shape_features_present]
+    non_bunt_swings    = bat_tracked_swings[bat_tracked_swings["is_bunt"] == 0]
+    fast_enough_swings = non_bunt_swings[non_bunt_swings["bat_speed"] >= BAT_SPEED_MIN]
+
+    horz_within_bounds = fast_enough_swings["horz_attack_angle"].abs() <= HORZ_ABS_MAX
+    vert_within_bounds = fast_enough_swings["vert_attack_angle"].between(*VERT_BOUNDS)
+    competitive_swings = fast_enough_swings[horz_within_bounds & vert_within_bounds].copy()
 
     print("Filter funnel:")
-    print(f"  all swings                 : {n0:>10,}")
-    print(f"  bat-tracked (5 feats)      : {len(d1):>10,}  ({len(d1)/n0*100:.1f}%)")
-    print(f"  - bunts removed            : {len(d2):>10,}  (-{len(d1)-len(d2):,})")
-    print(f"  - bat_speed >= {BAT_SPEED_MIN:g}         : {len(d3):>10,}  (-{len(d2)-len(d3):,})")
-    print(f"  - angle artifacts dropped  : {len(d4):>10,}  (-{len(d3)-len(d4):,})")
+    print(f"  all swings                 : {total_swing_count:>10,}")
+    print(f"  bat-tracked (5 feats)      : {len(bat_tracked_swings):>10,}  ({len(bat_tracked_swings)/total_swing_count*100:.1f}%)")
+    print(f"  - bunts removed            : {len(non_bunt_swings):>10,}  (-{len(bat_tracked_swings)-len(non_bunt_swings):,})")
+    print(f"  - bat_speed >= {BAT_SPEED_MIN:g}         : {len(fast_enough_swings):>10,}  (-{len(non_bunt_swings)-len(fast_enough_swings):,})")
+    print(f"  - angle artifacts dropped  : {len(competitive_swings):>10,}  (-{len(fast_enough_swings)-len(competitive_swings):,})")
 
     # pull frame (+ = pull side, both hands). horz_attack_angle is batter-relative with raw + = oppo,
     # so pull is a uniform negation (validated vs bearing_angle) — NOT a per-hand mirror.
-    d4["horz_attack_angle_pull"] = -d4["horz_attack_angle"]
-    out = d4[KEEP + ["horz_attack_angle_pull"]]
-    dest = DATA / "swings_model.parquet"
-    out.to_parquet(dest, index=False)
-    print(f"\nWrote {dest} ({dest.stat().st_size/1e6:.1f} MB) | {len(out):,} swings | "
-          f"{out.batter_id.nunique()} batters")
+    competitive_swings["horz_attack_angle_pull"] = -competitive_swings["horz_attack_angle"]
+
+    output_columns = KEEP + ["horz_attack_angle_pull"]
+    output_swings  = competitive_swings[output_columns]
+    output_path    = DATA / "swings_model.parquet"
+    output_swings.to_parquet(output_path, index=False)
+    print(f"\nWrote {output_path} ({output_path.stat().st_size/1e6:.1f} MB) | {len(output_swings):,} swings | "
+          f"{output_swings.batter_id.nunique()} batters")
 
     # cohort feasibility after filtering
-    per = out.groupby("batter_id").size()
+    swings_per_batter = output_swings.groupby("batter_id").size()
     print("\nPer-batter competitive-swing counts (2024-26 pooled):")
-    for thr in (100, 200, 300, 500):
-        print(f"  >= {thr:>3}: {int((per >= thr).sum())} batters")
-    q = per.quantile([.25, .5, .75]).astype(int)
-    print(f"  p25={q[.25]}, median={q[.5]}, p75={q[.75]}, max={per.max()}")
+    for threshold in (100, 200, 300, 500):
+        print(f"  >= {threshold:>3}: {int((swings_per_batter >= threshold).sum())} batters")
+
+    # quantile summary for the per-batter distribution
+    quartiles = swings_per_batter.quantile([.25, .5, .75]).astype(int)
+    print(f"  p25={quartiles[.25]}, median={quartiles[.5]}, p75={quartiles[.75]}, max={swings_per_batter.max()}")
 
     # residual artifact check (NOT dropped — user filters only; flag for decision)
     print("\nResidual extreme-angle check on the competitive set (candidates for a further trim):")
-    hz = out["horz_attack_angle"].abs()
-    vt = out["vert_attack_angle"]
-    print(f"  |horz_attack_angle| > 45 : {int((hz > 45).sum()):,} ({(hz > 45).mean()*100:.2f}%)")
-    print(f"  vert_attack_angle < -30  : {int((vt < -30).sum()):,} ({(vt < -30).mean()*100:.2f}%)")
-    print(f"  vert_attack_angle >  60  : {int((vt > 60).sum()):,} ({(vt > 60).mean()*100:.2f}%)")
+    horz_abs = output_swings["horz_attack_angle"].abs()
+    vert     = output_swings["vert_attack_angle"]
+    print(f"  |horz_attack_angle| > 45 : {int((horz_abs > 45).sum()):,} ({(horz_abs > 45).mean()*100:.2f}%)")
+    print(f"  vert_attack_angle < -30  : {int((vert < -30).sum()):,} ({(vert < -30).mean()*100:.2f}%)")
+    print(f"  vert_attack_angle >  60  : {int((vert > 60).sum()):,} ({(vert > 60).mean()*100:.2f}%)")
+
+    # compute summary stats then select only the relevant columns for display
     print("\n  shape feature ranges after filtering:")
-    print(out[SHAPE].describe().T[["mean", "std", "min", "25%", "50%", "75%", "max"]].round(2).to_string())
+    shape_stats_full    = output_swings[SHAPE].describe().T
+    shape_stats_display = shape_stats_full[["mean", "std", "min", "25%", "50%", "75%", "max"]]
+    print(shape_stats_display.round(2).to_string())
 
 
 if __name__ == "__main__":

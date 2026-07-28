@@ -10,7 +10,9 @@ Writes: data/swings_2024_2026_mlb.parquet, data/sample_1000.csv, data/profile.md
 Run:  python src/extract.py
 Creds (BIOMECH_DB_*) resolve from ~/.claude/.env per the mlb-db-analysis skill.
 """
-import os, re, warnings
+import os
+import re
+import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -29,15 +31,15 @@ SEASONS = (2024, 2025, 2026)
 
 
 def get_secret(name):
-    v = os.environ.get(name)
-    if v:
-        return v
-    ef = Path.home() / ".claude" / ".env"
-    if ef.exists():
-        for line in ef.read_text(encoding="utf-8", errors="ignore").splitlines():
-            m = re.match(rf'^\s*{re.escape(name)}\s*=\s*(.+)$', line)
-            if m:
-                return m.group(1).strip().strip('"').strip("'")
+    env_value = os.environ.get(name)
+    if env_value:
+        return env_value
+    env_file = Path.home() / ".claude" / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+            match = re.match(rf'^\s*{re.escape(name)}\s*=\s*(.+)$', line)
+            if match:
+                return match.group(1).strip().strip('"').strip("'")
     return None
 
 
@@ -80,74 +82,75 @@ WHERE r.level_id = 1
 
 def main():
     print("Connecting and querying (all MLB swings 2024-2026)...")
-    cn = connect()
-    df = pd.read_sql(QUERY, cn)
-    cn.close()
-    df["has_bat_tracking"] = df["bat_speed"].notna()
-    print(f"Pulled {len(df):,} swings | {df.batter_id.nunique()} batters")
+    connection = connect()
+    swings = pd.read_sql(QUERY, connection)
+    connection.close()
+    swings["has_bat_tracking"] = swings["bat_speed"].notna()
+    print(f"Pulled {len(swings):,} swings | {swings.batter_id.nunique()} batters")
 
-    out = DATA / "swings_2024_2026_mlb.parquet"
-    df.to_parquet(out, index=False)
-    print(f"Wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
+    parquet_path = DATA / "swings_2024_2026_mlb.parquet"
+    swings.to_parquet(parquet_path, index=False)
+    print(f"Wrote {parquet_path} ({parquet_path.stat().st_size/1e6:.1f} MB)")
 
-    df.sample(min(1000, len(df)), random_state=7).to_csv(DATA / "sample_1000.csv", index=False)
+    swings.sample(min(1000, len(swings)), random_state=7).to_csv(DATA / "sample_1000.csv", index=False)
     print(f"Wrote {DATA/'sample_1000.csv'}")
 
-    write_profile(df)
+    write_profile(swings)
     print(f"Wrote {DATA/'profile.md'}")
 
 
-def write_profile(df):
-    L = []
-    w = L.append
-    w("# Data profile — swings_2024_2026_mlb.parquet\n")
-    w(f"- Total swings (is_swing=1, MLB): **{len(df):,}**")
-    w(f"- Distinct batters: **{df.batter_id.nunique()}**")
-    w(f"- Bat-tracked swings: **{int(df.has_bat_tracking.sum()):,}** "
-      f"({df.has_bat_tracking.mean()*100:.1f}%)\n")
+def write_profile(swings):
+    lines = []
+    lines.append("# Data profile — swings_2024_2026_mlb.parquet\n")
+    lines.append(f"- Total swings (is_swing=1, MLB): **{len(swings):,}**")
+    lines.append(f"- Distinct batters: **{swings.batter_id.nunique()}**")
+    lines.append(f"- Bat-tracked swings: **{int(swings.has_bat_tracking.sum()):,}** "
+                 f"({swings.has_bat_tracking.mean()*100:.1f}%)\n")
 
-    w("## Swings & tracking rate by year")
-    by_year = df.groupby("game_year").agg(
-        swings=("play_id", "size"),
+    lines.append("## Swings & tracking rate by year")
+    by_year = swings.groupby("game_year").agg(
+        swing_count=("play_id", "size"),
         tracked=("has_bat_tracking", "sum"),
     )
-    by_year["tracked_rate"] = (by_year["tracked"] / by_year["swings"] * 100).round(1)
-    w(by_year.to_markdown() + "\n")
+    by_year["tracked_rate"] = (by_year["tracked"] / by_year["swing_count"] * 100).round(1)
+    lines.append(by_year.to_markdown() + "\n")
 
-    w("## Tracking rate by pitch_outcome (X=in play, S=strike/foul, others)")
-    by_out = df.groupby("pitch_outcome").agg(
-        swings=("play_id", "size"),
+    lines.append("## Tracking rate by pitch_outcome (X=in play, S=strike/foul, others)")
+    by_outcome = swings.groupby("pitch_outcome").agg(
+        swing_count=("play_id", "size"),
         tracked=("has_bat_tracking", "sum"),
     )
-    by_out["tracked_rate"] = (by_out["tracked"] / by_out["swings"] * 100).round(1)
-    w(by_out.sort_values("swings", ascending=False).to_markdown() + "\n")
+    by_outcome["tracked_rate"] = (by_outcome["tracked"] / by_outcome["swing_count"] * 100).round(1)
+    lines.append(by_outcome.sort_values("swing_count", ascending=False).to_markdown() + "\n")
 
-    w("## Per-batter POOLED tracked-swing counts (cohort feasibility)")
-    per = df[df.has_bat_tracking].groupby("batter_id").size()
-    w(f"- batters with >=1 tracked swing: {per.size}")
-    for thr in (100, 200, 300, 500):
-        w(f"- batters with >= {thr} tracked swings (2024-26 pooled): **{int((per >= thr).sum())}**")
-    q = per.quantile([.25, .5, .75, .9]).astype(int)
-    w(f"- distribution: p25={q[.25]}, median={q[.5]}, p75={q[.75]}, p90={q[.9]}, max={per.max()}\n")
+    lines.append("## Per-batter POOLED tracked-swing counts (cohort feasibility)")
+    swings_per_batter = swings[swings.has_bat_tracking].groupby("batter_id").size()
+    lines.append(f"- batters with >=1 tracked swing: {swings_per_batter.size}")
+    for threshold in (100, 200, 300, 500):
+        lines.append(f"- batters with >= {threshold} tracked swings (2024-26 pooled): "
+                     f"**{int((swings_per_batter >= threshold).sum())}**")
+    quartile_values = swings_per_batter.quantile([.25, .5, .75, .9]).astype(int)
+    lines.append(f"- distribution: p25={quartile_values[.25]}, median={quartile_values[.5]}, "
+                 f"p75={quartile_values[.75]}, p90={quartile_values[.9]}, max={swings_per_batter.max()}\n")
 
-    w("## Null rate by column (%)")
-    nulls = (df.isna().mean() * 100).round(1).sort_values(ascending=False)
-    nulls = nulls[nulls > 0]
-    w(nulls.to_frame("null_%").to_markdown() + "\n")
+    lines.append("## Null rate by column (%)")
+    null_rates = (swings.isna().mean() * 100).round(1).sort_values(ascending=False)
+    null_rates = null_rates[null_rates > 0]
+    lines.append(null_rates.to_frame("null_%").to_markdown() + "\n")
 
-    w("## Shape features — summary (tracked subset)")
-    desc = df.loc[df.has_bat_tracking, SHAPE_FEATURES + INTERCEPT].describe().T
-    desc = desc[["count", "mean", "std", "min", "25%", "50%", "75%", "max"]].round(2)
-    w(desc.to_markdown() + "\n")
+    lines.append("## Shape features — summary (tracked subset)")
+    shape_stats = swings.loc[swings.has_bat_tracking, SHAPE_FEATURES + INTERCEPT].describe().T
+    shape_stats = shape_stats[["count", "mean", "std", "min", "25%", "50%", "75%", "max"]].round(2)
+    lines.append(shape_stats.to_markdown() + "\n")
 
-    w("## Outcome columns — summary (tracked subset)")
-    oc = ["exit_velo", "launch_angle", "bearing_angle", "woba", "xwoba", "delta_run_exp"]
-    od = df.loc[df.has_bat_tracking, oc].describe().T
-    od = od[["count", "mean", "std", "min", "50%", "max"]].round(3)
-    w(od.to_markdown() + "\n")
+    lines.append("## Outcome columns — summary (tracked subset)")
+    outcome_cols = ["exit_velo", "launch_angle", "bearing_angle", "woba", "xwoba", "delta_run_exp"]
+    outcome_stats = swings.loc[swings.has_bat_tracking, outcome_cols].describe().T
+    outcome_stats = outcome_stats[["count", "mean", "std", "min", "50%", "max"]].round(3)
+    lines.append(outcome_stats.to_markdown() + "\n")
 
-    (DATA / "profile.md").write_text("\n".join(L), encoding="utf-8")
-    print("\n".join(L))
+    (DATA / "profile.md").write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
 
 
 if __name__ == "__main__":

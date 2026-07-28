@@ -75,102 +75,122 @@ HAA_OPPO, HAA_PULL = -6.5, 5.0         # horz_attack_angle_pull: <oppo / center 
 
 def load_centroids():
     """Per unit-cluster centroid in the pull frame + n + usage weight + display label."""
-    ca = pd.read_parquet(DATA / "cluster_assignments.parquet",
-                         columns=["play_id", "batter_id", "batter_stand", "cluster"])
-    sm = pd.read_parquet(DATA / "swings_model.parquet", columns=["play_id"] + FEAT)
-    lab = pd.read_parquet(DATA / "cluster_summary.parquet",
-                          columns=["batter_id", "batter_stand", "cluster", "label", "weight"])
-    df = ca.merge(sm, on="play_id", how="left")
-    cent = (df.groupby(["batter_id", "batter_stand", "cluster"])
-              .agg(n=("play_id", "size"), **{f: (f, "mean") for f in FEAT})
-              .reset_index()
-              .merge(lab, on=["batter_id", "batter_stand", "cluster"], how="left"))
-    return cent
+    cluster_assignments = pd.read_parquet(DATA / "cluster_assignments.parquet",
+                                          columns=["play_id", "batter_id", "batter_stand", "cluster"])
+    swings_model        = pd.read_parquet(DATA / "swings_model.parquet", columns=["play_id"] + FEAT)
+    cluster_summary     = pd.read_parquet(DATA / "cluster_summary.parquet",
+                                          columns=["batter_id", "batter_stand", "cluster", "label", "weight"])
+
+    swings_with_assignments = cluster_assignments.merge(swings_model, on="play_id", how="left")
+
+    # Aggregate to one centroid per (batter, stand, cluster) then attach display label and usage weight
+    feature_agg = {"n": ("play_id", "size"), **{feature: (feature, "mean") for feature in FEAT}}
+    centroids = (swings_with_assignments
+                 .groupby(["batter_id", "batter_stand", "cluster"])
+                 .agg(**feature_agg)
+                 .reset_index()
+                 .merge(cluster_summary, on=["batter_id", "batter_stand", "cluster"], how="left"))
+    return centroids
 
 
 def archetype_name(centroid):
     """Reproducible {vertical} {direction} name from a raw-unit centroid dict."""
-    vaa, haa = centroid["vert_attack_angle"], centroid["horz_attack_angle_pull"]
-    vert = "Flat" if vaa < VAA_FLAT else ("Uppercut" if vaa >= VAA_STEEP else "Level")
-    direction = "Oppo" if haa < HAA_OPPO else ("Pull" if haa >= HAA_PULL else "Center")
-    return f"{vert} {direction}"
+    vertical_attack_angle       = centroid["vert_attack_angle"]
+    horizontal_attack_angle_pull = centroid["horz_attack_angle_pull"]
+    vertical_label  = "Flat" if vertical_attack_angle < VAA_FLAT else ("Uppercut" if vertical_attack_angle >= VAA_STEEP else "Level")
+    direction_label = "Oppo" if horizontal_attack_angle_pull < HAA_OPPO else ("Pull" if horizontal_attack_angle_pull >= HAA_PULL else "Center")
+    return f"{vertical_label} {direction_label}"
 
 
-def fit_archetype(cent):
+def _build_lexicon_row(archetype_index, remapped_archetype_id, raw_means, component_assignments, centroids):
+    """Build one row of the archetype lexicon dict from a single GMM component."""
+    centroid_dict = dict(zip(GEO_FEAT, raw_means[archetype_index]))
+    member_mask   = component_assignments == archetype_index
+    return {
+        "archetype":      remapped_archetype_id,
+        "archetype_name": archetype_name(centroid_dict),
+        "n_shapes":       int(member_mask.sum()),
+        **{SHORT[feature]: round(centroid_dict[feature], 2) for feature in GEO_FEAT},
+        # bat_speed descriptor = mean over the member shapes' centroids
+        "bat_speed": round(centroids.loc[member_mask, DESCRIPTOR].mean(), 2),
+    }
+
+
+def fit_archetype(centroids):
     """League-standardize the geometry-centroid pool, fit the archetype GMM, tag every
     unit-cluster. bat_speed is not fitted — reported per archetype as a descriptor.
-    Returns (cent + archetype cols, lexicon dataframe)."""
-    mu, sd = cent[GEO_FEAT].mean(), cent[GEO_FEAT].std()
-    Z = ((cent[GEO_FEAT] - mu) / sd).to_numpy()
-    gm = GaussianMixture(K_ARCH, covariance_type="full", n_init=N_INIT,
-                         reg_covar=1e-4, random_state=SEED).fit(Z)
-    resp = gm.predict_proba(Z)
-    raw_means = gm.means_ * sd.values + mu.values        # de-standardize geometry centroids
+    Returns (centroids + archetype cols, lexicon dataframe)."""
+    feature_means = centroids[GEO_FEAT].mean()
+    feature_stds  = centroids[GEO_FEAT].std()
+    standardized_geometry = ((centroids[GEO_FEAT] - feature_means) / feature_stds).to_numpy()
+
+    gmm = GaussianMixture(K_ARCH, covariance_type="full", n_init=N_INIT,
+                          reg_covar=1e-4, random_state=SEED).fit(standardized_geometry)
+    responsibilities = gmm.predict_proba(standardized_geometry)
+    raw_means = gmm.means_ * feature_stds.values + feature_means.values  # de-standardize geometry centroids
 
     # relabel archetypes by prevalence (0 = most common) for stable, meaningful ids
-    comp = resp.argmax(axis=1)
-    order = pd.Series(comp).value_counts().index.to_numpy()
+    component_assignments = responsibilities.argmax(axis=1)
+    prevalence_order      = pd.Series(component_assignments).value_counts().index.to_numpy()
     remap = np.empty(K_ARCH, dtype=int)
-    remap[order] = np.arange(K_ARCH)
+    remap[prevalence_order] = np.arange(K_ARCH)
 
-    lex = []
-    for a in range(K_ARCH):
-        c = dict(zip(GEO_FEAT, raw_means[a]))
-        lex.append({"archetype": remap[a], "archetype_name": archetype_name(c),
-                    "n_shapes": int((comp == a).sum()),
-                    **{SHORT[f]: round(c[f], 2) for f in GEO_FEAT},
-                    # bat_speed descriptor = mean over the member shapes' centroids
-                    "bat_speed": round(cent.loc[comp == a, DESCRIPTOR].mean(), 2)})
-    lex = pd.DataFrame(lex).sort_values("archetype").reset_index(drop=True)
-    names = lex["archetype_name"]
-    if names.duplicated().any():
-        raise ValueError(f"archetype names collide at K_ARCH={K_ARCH}: {names.tolist()} — "
+    lexicon_rows = [
+        _build_lexicon_row(archetype_index, remap[archetype_index], raw_means, component_assignments, centroids)
+        for archetype_index in range(K_ARCH)
+    ]
+    lexicon = pd.DataFrame(lexicon_rows).sort_values("archetype").reset_index(drop=True)
+
+    archetype_names = lexicon["archetype_name"]
+    if archetype_names.duplicated().any():
+        raise ValueError(f"archetype names collide at K_ARCH={K_ARCH}: {archetype_names.tolist()} — "
                          "retune name thresholds or K_ARCH")
 
-    out = cent.copy()
-    out["archetype"] = remap[comp]
-    out["arch_confidence"] = resp.max(axis=1).round(3)
-    out = out.merge(lex[["archetype", "archetype_name"]], on="archetype", how="left")
-    return out, lex
+    tagged_centroids = centroids.copy()
+    tagged_centroids["archetype"]       = remap[component_assignments]
+    tagged_centroids["arch_confidence"] = responsibilities.max(axis=1).round(3)
+    tagged_centroids = tagged_centroids.merge(lexicon[["archetype", "archetype_name"]], on="archetype", how="left")
+    return tagged_centroids, lexicon
 
 
-def write_catalog(shapes, lex):
-    L = []
-    w = L.append
-    w("# Swing-shape archetype lexicon (Layer 1)\n")
-    w(f"- {len(shapes):,} unit-clusters across {shapes.groupby(['batter_id','batter_stand']).ngroups} "
-      f"(batter, stand) units, mapped onto **{K_ARCH} league archetypes** (pull frame).")
-    w(f"- Naming is algorithmic from the archetype centroid: vertical "
-      f"(Flat < {VAA_FLAT}° VAA <= Level < {VAA_STEEP}° <= Uppercut) x direction "
-      f"(Oppo < {HAA_OPPO}° HAA_pull < Center < {HAA_PULL}° <= Pull).")
-    w(f"- Assignment confidence (max archetype responsibility) — median "
-      f"{shapes.arch_confidence.median():.2f}, share > 0.8: {(shapes.arch_confidence > 0.8).mean():.0%}\n")
+def write_catalog(shapes, lexicon):
+    lines = []
+    lines.append("# Swing-shape archetype lexicon (Layer 1)\n")
+    lines.append(f"- {len(shapes):,} unit-clusters across {shapes.groupby(['batter_id','batter_stand']).ngroups} "
+                 f"(batter, stand) units, mapped onto **{K_ARCH} league archetypes** (pull frame).")
+    lines.append(f"- Naming is algorithmic from the archetype centroid: vertical "
+                 f"(Flat < {VAA_FLAT}° VAA <= Level < {VAA_STEEP}° <= Uppercut) x direction "
+                 f"(Oppo < {HAA_OPPO}° HAA_pull < Center < {HAA_PULL}° <= Pull).")
+    lines.append(f"- Assignment confidence (max archetype responsibility) — median "
+                 f"{shapes.arch_confidence.median():.2f}, share > 0.8: {(shapes.arch_confidence > 0.8).mean():.0%}\n")
 
-    w("## The lexicon (raw-unit centroids)")
-    w(lex[["archetype", "archetype_name", "n_shapes", "tilt", "len", "bat_speed", "vaa", "haa_pull"]]
-      .to_markdown(index=False) + "\n")
+    lines.append("## The lexicon (raw-unit centroids)")
+    lines.append(lexicon[["archetype", "archetype_name", "n_shapes", "tilt", "len", "bat_speed", "vaa", "haa_pull"]]
+                 .to_markdown(index=False) + "\n")
 
-    w("## Exemplars per archetype (largest shapes)")
-    for _, r in lex.iterrows():
-        ex = (shapes[shapes.archetype == r.archetype]
-              .sort_values("n", ascending=False).head(6)["label"].tolist())
-        w(f"- **{r.archetype_name}** ({r.n_shapes} shapes): " + ", ".join(ex))
-    w("")
+    lines.append("## Exemplars per archetype (largest shapes)")
+    for _, archetype_row in lexicon.iterrows():
+        member_shapes = shapes[shapes.archetype == archetype_row.archetype]
+        top_exemplars = member_shapes.sort_values("n", ascending=False).head(6)["label"].tolist()
+        lines.append(f"- **{archetype_row.archetype_name}** ({archetype_row.n_shapes} shapes): "
+                     + ", ".join(top_exemplars))
+    lines.append("")
 
-    (DATA / "archetype_lexicon.md").write_text("\n".join(L), encoding="utf-8")
-    print("\n".join(L))
+    catalog_text = "\n".join(lines)
+    (DATA / "archetype_lexicon.md").write_text(catalog_text, encoding="utf-8")
+    print(catalog_text)
 
 
 def main():
-    cent = load_centroids()
-    print(f"Loaded {len(cent):,} unit-cluster centroids (pull frame)")
-    shapes, lex = fit_archetype(cent)
+    centroids = load_centroids()
+    print(f"Loaded {len(centroids):,} unit-cluster centroids (pull frame)")
+    tagged_centroids, lexicon = fit_archetype(centroids)
 
-    keep = (["batter_id", "batter_stand", "cluster", "label", "archetype", "archetype_name",
-             "arch_confidence", "n", "weight"] + FEAT)
-    shapes[keep].to_parquet(DATA / "shape_archetypes.parquet", index=False)
-    lex.to_parquet(DATA / "archetype_lexicon.parquet", index=False)
-    write_catalog(shapes, lex)
+    output_columns = (["batter_id", "batter_stand", "cluster", "label", "archetype", "archetype_name",
+                        "arch_confidence", "n", "weight"] + FEAT)
+    tagged_centroids[output_columns].to_parquet(DATA / "shape_archetypes.parquet", index=False)
+    lexicon.to_parquet(DATA / "archetype_lexicon.parquet", index=False)
+    write_catalog(tagged_centroids, lexicon)
     print(f"\nWrote shape_archetypes / archetype_lexicon (.parquet) + archetype_lexicon.md")
 
 

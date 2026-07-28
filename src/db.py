@@ -68,12 +68,24 @@ def connect(*only: str) -> duckdb.DuckDBPyConnection:
         con = db.connect()  # all views (original behavior)
     """
     con = duckdb.connect()
-    parquets = {k: v for k, v in _PARQUETS.items() if not only or k in only}
-    csvs     = {k: v for k, v in _CSVS.items()     if not only or k in only}
-    for name, rel in parquets.items():
-        path = str(ROOT / rel)
-        con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path}')")
-    for name, rel in csvs.items():
-        path = str(ROOT / rel)
-        con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_csv_auto('{path}')")
+
+    # Filter to only the requested views; if no names given, include everything
+    requested_parquets = {}
+    for view_name, relative_path in _PARQUETS.items():
+        if not only or view_name in only:
+            requested_parquets[view_name] = relative_path
+
+    requested_csvs = {}
+    for view_name, relative_path in _CSVS.items():
+        if not only or view_name in only:
+            requested_csvs[view_name] = relative_path
+
+    for view_name, relative_path in requested_parquets.items():
+        absolute_path = str(ROOT / relative_path)
+        con.execute(f"CREATE VIEW {view_name} AS SELECT * FROM read_parquet('{absolute_path}')")
+
+    for view_name, relative_path in requested_csvs.items():
+        absolute_path = str(ROOT / relative_path)
+        con.execute(f"CREATE VIEW {view_name} AS SELECT * FROM read_csv_auto('{absolute_path}')")
+
     return con
