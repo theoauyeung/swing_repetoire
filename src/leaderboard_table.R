@@ -58,7 +58,7 @@ save_png <- function(tbl, path) {
 # fixed to the full pool, `labels` a named list of pretty headers, `pct_col` (optional) a proportion
 # column rendered as a percent.
 make_leaderboard <- function(df, value_col, pal, labels, align_cols,
-                             title, subtitle, footnote, out, width = 800, pct_col = NULL) {
+                             title, subtitle, out, footnote = NULL, width = 800, pct_col = NULL) {
   tbl <- df |>
     gt() |>
     gt_theme_538(quiet = TRUE) |>
@@ -69,8 +69,10 @@ make_leaderboard <- function(df, value_col, pal, labels, align_cols,
     sub_missing(missing_text = "-")
   if (!is.null(pct_col)) tbl <- tbl |> fmt_percent(columns = all_of(pct_col), decimals = 1)
   tbl <- tbl |>
-    tab_header(title = md(title), subtitle = md(subtitle)) |>
-    tab_footnote(footnote = footnote, locations = cells_column_labels(all_of(value_col))) |>
+    tab_header(title = md(title), subtitle = md(subtitle))
+  if (!is.null(footnote))
+    tbl <- tbl |> tab_footnote(footnote = footnote, locations = cells_column_labels(all_of(value_col)))
+  tbl <- tbl |>
     tab_options(table.font.size = 13, data_row.padding = px(3), table.width = px(width))
   save_png(tbl, out)
 }
@@ -116,7 +118,7 @@ if (!is.na(DRILL)) {
   make_leaderboard(d |> select(all_of(cl_cols)), "SwingPlus", pal_cl, cl_labels, cl_align,
                    sprintf("**Swing shapes by value - %s**", nm),
                    sprintf("Each of the hitter's shapes ranked by Swing+  &middot;  color = league scale (all %d shapes)", nrow(cl_pool)),
-                   cl_foot, out, width = 900, pct_col = "UsageProp")
+                   out, footnote = cl_foot, width = 900, pct_col = "UsageProp")
   quit(save = "no", status = 0)
 }
 
@@ -139,13 +141,13 @@ sp_sub    <- sprintf("Mean per-swing xRV, 0-100 scale (50 = league-average)  &mi
 
 make_leaderboard(head(sp_pool, TOP_N) |> select(all_of(sp_cols)),
                  "SwingPlus", pal_sp, sp_labels, sp_align,
-                 "**Swing+ Leaderboard**", sp_sub, sp_foot,
-                 fig_path("swingplus_leaderboard_gt.png"), width = 760)
+                 "**Swing+ Leaderboard**", sp_sub,
+                 fig_path("swingplus_leaderboard_gt.png"), footnote = sp_foot, width = 760)
 
 make_leaderboard(tail(sp_pool, TOP_N) |> select(all_of(sp_cols)),
                  "SwingPlus", pal_sp, sp_labels, sp_align,
-                 "**Swing+ Leaderboard**", sp_sub, sp_foot,
-                 fig_path("swingplus_bottom_gt.png"), width = 760)
+                 "**Swing+ Leaderboard**", sp_sub,
+                 fig_path("swingplus_bottom_gt.png"), footnote = sp_foot, width = 760)
 
 # ── Repertoire+ (unit = batter x stand) ─────────────────────────────────────────
 
@@ -164,18 +166,17 @@ rep_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = 
                    k = "Shapes (k)", RepertoirePlus = "Repertoire+", SwingPlus = "Swing+")
 rep_align  <- c("Rank", "batter_stand", "k", "RepertoirePlus", "SwingPlus")
 rep_cols   <- c("Rank", "batter_id", "label", "batter_stand", "k", "RepertoirePlus", "SwingPlus")
-rep_foot   <- "Repertoire+ is geometry only (no value). Swing+ is the unit's mean swing quality - an independent axis."
 rep_sub    <- sprintf("Repertoire width: usage-weighted shape spread × effective # of shapes (50 = league-average)  &middot;  color spans all %d units",
                       nrow(rep_pool))
 
 make_leaderboard(head(rep_pool, TOP_N) |> select(all_of(rep_cols)),
                  "RepertoirePlus", pal_rep, rep_labels, rep_align,
-                 "**Repertoire+ Leaderboard**", rep_sub, rep_foot,
+                 "**Repertoire+ Leaderboard**", rep_sub,
                  fig_path("repertoire_leaderboard_gt.png"), width = 820)
 
 make_leaderboard(tail(rep_pool, TOP_N) |> select(all_of(rep_cols)),
                  "RepertoirePlus", pal_rep, rep_labels, rep_align,
-                 "**Repertoire+ Leaderboard**", rep_sub, rep_foot,
+                 "**Repertoire+ Leaderboard**", rep_sub,
                  fig_path("repertoire_bottom_gt.png"), width = 820)
 
 # ── Swing+ by shape (top / bottom), reusing cl_pool + pal_cl from above ──────────────────────────
@@ -185,19 +186,18 @@ cl_sub <- sprintf("Value of a single swing shape (>=%d swings)  &middot;  color 
 
 make_leaderboard(head(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
-                 "**Swing+ by Shape**", cl_sub, cl_foot,
-                 fig_path("swingplus_by_cluster_gt.png"), width = 900, pct_col = "UsageProp")
+                 "**Swing+ by Shape**", cl_sub,
+                 fig_path("swingplus_by_cluster_gt.png"), footnote = cl_foot, width = 900, pct_col = "UsageProp")
 
 make_leaderboard(tail(cl_pool, TOP_N) |> select(all_of(cl_cols)),
                  "SwingPlus", pal_cl, cl_labels, cl_align,
-                 "**Swing+ by Shape**", cl_sub, cl_foot,
-                 fig_path("swingplus_by_cluster_bottom_gt.png"), width = 900, pct_col = "UsageProp")
+                 "**Swing+ by Shape**", cl_sub,
+                 fig_path("swingplus_by_cluster_bottom_gt.png"), footnote = cl_foot, width = 900, pct_col = "UsageProp")
 
 # ── Adjustability (unit = batter x stand) ────────────────────────────────────────
 # How much a hitter reshapes his swing by situation, net of pitch location (adjusted-R^2 magnitude on
-# the trait dials; see src/adjustability.py). Colored on the headline `adjustability`, with the count
-# and pitch axes shown alongside: the payoff (two-strike protection) lives in adj_count, while the
-# headline is adj_pitch-dominated -- so the breakdown matters more here than the single number.
+# the trait dials; see src/adjustability.py). Ranked by composite `adjustability` (v4: count-led,
+# corr adj_count 0.72 > adj_pitch 0.57). Count and pitch axes shown as breakdown columns.
 
 adj_pool <- read_parquet("data/adjustability.parquet",
                          col_select = c("batter_id", "batter_stand", "label", "n_swings",
@@ -213,18 +213,17 @@ adj_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = 
                    Adjustability = "Adjustability", Count = "Count axis", Pitch = "Pitch axis")
 adj_align  <- c("Rank", "batter_stand", "Adjustability", "Count", "Pitch")
 adj_cols   <- c("Rank", "batter_id", "label", "batter_stand", "Adjustability", "Count", "Pitch")
-adj_foot   <- "Adjustability = incremental adjusted-R² the situation adds over pitch location (one joint regression per hitter). Count/Pitch = each axis's unique contribution, net of the others. The two-strike payoff is in the Count axis."
 adj_sub    <- sprintf("Situational swing change, net of pitch location  &middot;  &ge;%d swings 2024-25  &middot;  color spans all %d qualified units",
                       400, nrow(adj_pool))
 
 make_leaderboard(head(adj_pool, TOP_N) |> select(all_of(adj_cols)),
                  "Adjustability", pal_adj, adj_labels, adj_align,
-                 "**Adjustability Leaderboard**", adj_sub, adj_foot,
+                 "**Adjustability Leaderboard**", adj_sub,
                  fig_path("adjustability_leaderboard_gt.png"), width = 820)
 
 make_leaderboard(tail(adj_pool, TOP_N) |> select(all_of(adj_cols)),
                  "Adjustability", pal_adj, adj_labels, adj_align,
-                 "**Adjustability Leaderboard**", adj_sub, adj_foot,
+                 "**Adjustability Leaderboard**", adj_sub,
                  fig_path("adjustability_bottom_gt.png"), width = 820)
 
 # ── Adjustability leaders / trailers ─────────────────────────────────────────────────────────────
@@ -257,9 +256,7 @@ if (file.exists("data/twostrike_penalties.parquet")) {
   pay_align  <- c("Rank", "batter_stand", "Adjustability", "CountAdj", "MatchedRV", "Whiff2K", "SwingPlus")
   pay_foot   <- paste0(
     "n=", n_pool, " qualified units (≥400 swings, 2024-25). ",
-    "Adjustability = composite incremental adj-R² the situation adds over pitch location, averaged over 3 dials. ",
-    "2K Δ run value = matched vs own early swings at same pitch_type × zone (positive = more resilient). ",
-    "2K Δ whiff = extra whiff rate at two strikes (negative = better).")
+    "Adjustability = composite incremental adj-R² the situation adds over pitch location, averaged over 3 dials. ")
 
   top_pay <- pay_raw |> head(TOP_N)
   bot_pay <- pay_raw |> tail(TOP_N) |> arrange(Adjustability) |> mutate(Rank = row_number())
@@ -268,13 +265,13 @@ if (file.exists("data/twostrike_penalties.parquet")) {
                    "Adjustability", pal_adj_pay, pay_labels, pay_align,
                    "**Adjustability — Top Performers**",
                    sprintf("Most situationally adaptive hitters  &middot;  n=%d  &middot;  color = adjustability", n_pool),
-                   pay_foot, fig_path("adjustability_payoff_best_gt.png"), width = 950)
+                   fig_path("adjustability_payoff_best_gt.png"), footnote = pay_foot, width = 950)
 
   make_leaderboard(bot_pay |> select(all_of(pay_cols)),
                    "Adjustability", pal_adj_pay, pay_labels, pay_align,
                    "**Adjustability — Bottom Performers**",
                    sprintf("Least situationally adaptive hitters  &middot;  same pool (n=%d)  &middot;  color = adjustability", n_pool),
-                   pay_foot, fig_path("adjustability_payoff_worst_gt.png"), width = 950)
+                   fig_path("adjustability_payoff_worst_gt.png"), footnote = pay_foot, width = 950)
 } else {
   cat("Skipping payoff leaderboard: data/twostrike_penalties.parquet not found.\n",
       "Run the ‘Two-strike outcome gap’ cell in adjustability_results.ipynb first.\n")
