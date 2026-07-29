@@ -31,15 +31,6 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
 TREATMENTS = ["adjustability", "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]
-# Maps each treatment name to the axes dict key (or "composite" for the headline)
-TREATMENT_AXIS = {
-    "adjustability": "composite",
-    "adj_count":     "count",
-    "adj_gamestate": "gamestate",
-    "adj_pitch":     "pitch",
-    "adj_platoon":   "platoon",
-}
-
 AXES = {
     "count":     ["balls", "strikes"],
     "gamestate": ["base_state", "outs_when_up"],
