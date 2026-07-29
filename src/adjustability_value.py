@@ -205,6 +205,39 @@ def validate_treatments(treats: pd.DataFrame) -> float:
     return r
 
 
+def assemble_analysis_df(df: pd.DataFrame, treats: pd.DataFrame) -> tuple:
+    """
+    Merge swing table with treatment scores, add derived confounder columns,
+    dummy-encode categoricals. Returns one wide DataFrame ready for dml_swing calls.
+    """
+    df = df.reset_index(drop=True)
+    df["swing_idx"] = df.groupby(KEY).cumcount()
+
+    merged = df.merge(treats, on=KEY + ["swing_idx"], how="inner")
+
+    # Quadratic / interaction location terms
+    merged["px2"]  = merged["px"] ** 2
+    merged["pz2"]  = merged["pz"] ** 2
+    merged["pxpz"] = merged["px"] * merged["pz"]
+
+    # Dummy-encode categoricals (drop_first to avoid collinearity)
+    cat_dummies = pd.get_dummies(
+        merged[CONFOUNDER_CAT].astype(str), drop_first=True
+    )
+
+    # CONFOUNDER_NUM already includes "strikes" and "balls"; list them once
+    result = pd.concat(
+        [merged[["batter_id", "batter_stand",
+                  "delta_run_exp", "is_whiff"]
+                 + [f"T_{ax}" for ax in list(AXES.keys())]
+                 + ["T_composite"]
+                 + CONFOUNDER_NUM].reset_index(drop=True),
+         cat_dummies.reset_index(drop=True)],
+        axis=1,
+    )
+    return result, CONFOUNDER_NUM + cat_dummies.columns.tolist()
+
+
 def dml_swing(df: pd.DataFrame, treatment_col: str, outcome_col: str,
               confounder_cols: list) -> tuple:
     """
@@ -269,3 +302,85 @@ def dml_swing(df: pd.DataFrame, treatment_col: str, outcome_col: str,
     r2_Y = float(1 - np.sum(Y_resid**2) / np.sum((Y - Y.mean())**2))
 
     return theta, se, t, p, n, r2_T, r2_Y
+
+
+def main():
+    print("Loading swings...")
+    df = load_swings()
+    print(f"  {len(df):,} swings")
+
+    print("Building pitcher quality...")
+    pq = build_pitcher_quality(df)
+    df = df.merge(pq.reset_index(), on="pitcher_id", how="left")
+
+    print("Building swing treatments (within-batter cross-fitting)...")
+    treats = build_swing_treatments(df, AXES)
+    print(f"  {len(treats):,} treatment rows")
+
+    print("Validating treatments...")
+    validate_treatments(treats)
+
+    print("Assembling analysis DataFrame...")
+    analysis_df, confounder_cols = assemble_analysis_df(df, treats)
+    df_2k = analysis_df[analysis_df["strikes"] == 2].copy()
+    print(f"  All swings n={len(analysis_df):,}  |  Two-strike n={len(df_2k):,}")
+
+    # Map treatment name -> column name in analysis_df
+    treat_col = {
+        "adjustability": "T_composite",
+        "adj_count":     "T_count",
+        "adj_gamestate": "T_gamestate",
+        "adj_pitch":     "T_pitch",
+        "adj_platoon":   "T_platoon",
+    }
+
+    specs = [
+        ("Season-wide",  analysis_df, "delta_run_exp", "Run value per swing"),
+        ("Season-wide",  analysis_df, "is_whiff",      "Whiff rate"),
+        ("Two-strike",   df_2k,       "delta_run_exp", "Two-strike run value"),
+        ("Two-strike",   df_2k,       "is_whiff",      "Two-strike whiff rate"),
+    ]
+
+    rows = []
+    for treatment in TREATMENTS:
+        for scope, data, outcome, label in specs:
+            print(f"  DML: {treatment} / {scope} / {outcome}...")
+            theta, se, t, p, n, r2_T, r2_Y = dml_swing(
+                data, treat_col[treatment], outcome, confounder_cols
+            )
+            rows.append(dict(
+                treatment=treatment, scope=scope, outcome=label, n=n,
+                theta=round(theta, 4), se=round(se, 4),
+                ci_lo=round(theta - 1.96 * se, 4),
+                ci_hi=round(theta + 1.96 * se, 4),
+                t=round(t, 2), p=round(p, 4),
+                r2_T=round(r2_T, 3), r2_Y=round(r2_Y, 3),
+            ))
+            print(f"    theta={theta:+.4f}  SE={se:.4f}  t={t:.2f}  p={p:.4f}"
+                  f"  r2_T={r2_T:.3f}  r2_Y={r2_Y:.3f}")
+
+    tab = pd.DataFrame(rows)
+    lines = [
+        "# Adjustability value — swing-level DML causal estimates\n",
+        f"Swing-level DML (n~100k swings). Treatment = per-swing fitted situational shift magnitude "
+        f"from within-batter 5-fold cross-fitting, averaged across 3 dials "
+        f"(bat_speed, swing_length, swing_path_tilt) in within-batter SD units. "
+        f"Unsigned (absolute value). 2024-25, >=400 swings per (batter, stand).\n",
+        "**Method:** Robinson (1988) partial linear model. XGBoost nuisance models "
+        f"(GroupKFold on batter_id, {N_OUTER_FOLDS} folds). Within-batter demeaning for batter FE. "
+        "Clustered sandwich SE by batter.\n",
+        "**Confounders:** location surface (px, pz, px^2, pz^2, px*pz), count (balls, strikes), "
+        "game state (base_state, outs_when_up), pitch group, platoon, pitcher quality. "
+        "Batter-level traits (swing quality, repertoire, playing time, handedness) absorbed by demeaning.\n",
+        "**Two-strike subset:** strikes==2 filter applied before demeaning.\n",
+        "## Results\n",
+        tab.to_markdown(index=False),
+        "",
+    ]
+    out = ROOT / "results" / "adjustability_value.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print(f"\nWrote {out}")
+
+
+if __name__ == "__main__":
+    main()
