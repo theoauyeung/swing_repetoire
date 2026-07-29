@@ -203,3 +203,69 @@ def validate_treatments(treats: pd.DataFrame) -> float:
     if r < CORR_WARN:
         print(f"  WARNING: r={r:.3f} < {CORR_WARN} — treatment construction may have diverged from intent")
     return r
+
+
+def dml_swing(df: pd.DataFrame, treatment_col: str, outcome_col: str,
+              confounder_cols: list) -> tuple:
+    """
+    Swing-level DML. Robinson (1988) partial linear model:
+      - Within-batter demeaning for batter FE (absorbs swing quality, playing time, etc.)
+      - XGBoost nuisance models with GroupKFold on batter_id
+      - Clustered sandwich SE by batter (accounts for ~200 correlated swings per hitter)
+
+    Treatment and outcome standardised to mean=0, SD=1 before nuisance fitting so θ is
+    a standardised partial effect comparable across outcomes.
+
+    Returns: (theta, se, t, p, n, r2_T, r2_Y)
+    """
+    df = (df.dropna(subset=[treatment_col, outcome_col] + confounder_cols)
+            .copy()
+            .reset_index(drop=True))
+
+    # Within-batter demeaning — subtracts each batter's mean from every column
+    # This is the within-estimator (strict FE): absorbs all batter-level confounders
+    for col in [treatment_col, outcome_col] + confounder_cols:
+        df[col] = df[col] - df.groupby("batter_id")[col].transform("mean")
+
+    T_raw = df[treatment_col].to_numpy(float)
+    Y_raw = df[outcome_col].to_numpy(float)
+    T_std, Y_std = T_raw.std(), Y_raw.std()
+    T = T_raw / T_std if T_std > 0 else T_raw
+    Y = Y_raw / Y_std if Y_std > 0 else Y_raw
+
+    X           = df[confounder_cols].to_numpy(float)
+    batter_ids  = df["batter_id"].to_numpy()
+    n           = len(df)
+
+    T_resid = np.zeros(n)
+    Y_resid = np.zeros(n)
+
+    gkf = GroupKFold(n_splits=N_OUTER_FOLDS)
+    for train_idx, val_idx in gkf.split(X, groups=batter_ids):
+        model_T = XGBRegressor(**XGB_PARAMS)
+        model_T.fit(X[train_idx], T[train_idx])
+        T_resid[val_idx] = T[val_idx] - model_T.predict(X[val_idx])
+
+        model_Y = XGBRegressor(**XGB_PARAMS)
+        model_Y.fit(X[train_idx], Y[train_idx])
+        Y_resid[val_idx] = Y[val_idx] - model_Y.predict(X[val_idx])
+
+    theta = float(np.dot(T_resid, Y_resid) / np.dot(T_resid, T_resid))
+
+    # Clustered sandwich SE: sum influence scores within each batter before squaring
+    psi             = T_resid * (Y_resid - theta * T_resid)
+    cluster_sums    = pd.Series(psi, index=batter_ids).groupby(level=0).sum()
+    B               = len(cluster_sums)
+    mean_sq_T       = float(np.mean(T_resid ** 2))
+    # Small-sample correction: B/(B-1); negligible at B≈471 but correct practice
+    var_theta       = float((cluster_sums ** 2).sum()) / (mean_sq_T ** 2) / n ** 2 * (B / (B - 1))
+    se              = float(np.sqrt(max(var_theta, 0.0)))
+
+    t = theta / se if se > 0 else np.nan
+    # df = B-1: SE is estimated from B cluster sums, not n rows
+    p = float(2 * stats.t.sf(abs(t), df=B - 1)) if se > 0 else np.nan
+
+    r2_T = float(1 - np.sum(T_resid**2) / np.sum((T - T.mean())**2))
+    r2_Y = float(1 - np.sum(Y_resid**2) / np.sum((Y - Y.mean())**2))
+
+    return theta, se, t, p, n, r2_T, r2_Y
