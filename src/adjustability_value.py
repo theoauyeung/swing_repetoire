@@ -51,6 +51,7 @@ N_INNER_FOLDS = 5   # within-batter cross-fitting folds
 N_OUTER_FOLDS = 5   # DML nuisance cross-fitting folds
 SEED          = 42
 CORR_WARN     = 0.6  # soft threshold for treatment validation
+MAX_STD_SHIFT = 1.5  # clip per-dial standardised shift before abs to guard against degenerate folds
 
 XGB_PARAMS = dict(
     n_estimators=300, max_depth=3, learning_rate=0.05,
@@ -139,13 +140,17 @@ def build_swing_treatments(df: pd.DataFrame, axes: dict) -> pd.DataFrame:
 
                 # Composite: all situation columns
                 raw = X_val[:, n_loc:] @ sit_coefs
-                dial_shifts["composite"][:, d_idx] = np.abs(raw / dial_sd)
+                dial_shifts["composite"][:, d_idx] = np.abs(
+                    np.clip(raw / dial_sd, -MAX_STD_SHIFT, MAX_STD_SHIFT)
+                )
 
                 # Per-axis: only that axis's column slice
                 for axis_name, slc in axis_slices.items():
                     axis_coefs = sit_coefs[slc]
                     raw_axis   = X_val[:, n_loc + slc.start: n_loc + slc.stop] @ axis_coefs
-                    dial_shifts[axis_name][:, d_idx] = np.abs(raw_axis / dial_sd)
+                    dial_shifts[axis_name][:, d_idx] = np.abs(
+                        np.clip(raw_axis / dial_sd, -MAX_STD_SHIFT, MAX_STD_SHIFT)
+                    )
 
             # Average across dials → one scalar per swing per treatment
             for name in ["composite"] + axis_names:
@@ -183,7 +188,7 @@ def build_pitcher_quality(df: pd.DataFrame) -> pd.Series:
     return df.groupby("pitcher_id")["delta_run_exp"].mean().rename("pitcher_quality")
 
 
-def validate_treatments(df: pd.DataFrame, treats: pd.DataFrame) -> float:
+def validate_treatments(treats: pd.DataFrame) -> float:
     """
     Aggregate swing-level composite treatment to (batter, stand) mean and compare
     to the batter-level adjustability score from adjustability.parquet.
