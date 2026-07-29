@@ -353,7 +353,7 @@ def main():
     tab = pd.DataFrame(rows)
     lines = [
         "# Adjustability value — swing-level DML causal estimates\n",
-        f"Swing-level DML (n~100k swings). Treatment = per-swing fitted situational shift magnitude "
+        f"Swing-level DML (n={len(analysis_df):,} swings). Treatment = per-swing fitted situational shift magnitude "
         f"from within-batter 5-fold cross-fitting, averaged across 3 dials "
         f"(bat_speed, swing_length, swing_path_tilt) in within-batter SD units. "
         f"Unsigned (absolute value). 2024-25, >=400 swings per (batter, stand).\n",
