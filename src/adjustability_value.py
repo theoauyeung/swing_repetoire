@@ -161,3 +161,40 @@ def build_swing_treatments(df: pd.DataFrame, axes: dict) -> pd.DataFrame:
             })
 
     return pd.DataFrame(records)
+
+
+def load_swings() -> pd.DataFrame:
+    """Load and context-enrich the full competitive swing table for 2024-25."""
+    return add_context(pd.read_parquet(
+        DATA / "swings_model.parquet",
+        columns=KEY + [
+            "game_year", "batter_full_name",
+            "balls", "strikes", "outs_when_up",
+            "plate_x", "plate_z", "sz_top", "sz_bot",
+            "pitch_type", "pitcher_throws",
+            "on_1b_id", "on_2b_id", "on_3b_id",
+            "pitcher_id", "delta_run_exp", "is_whiff",
+        ] + DIALS,
+    ).query("game_year in @SEASONS"))
+
+
+def build_pitcher_quality(df: pd.DataFrame) -> pd.Series:
+    """Per-pitcher mean delta_run_exp across all their swings — proxy for pitcher difficulty."""
+    return df.groupby("pitcher_id")["delta_run_exp"].mean().rename("pitcher_quality")
+
+
+def validate_treatments(df: pd.DataFrame, treats: pd.DataFrame) -> float:
+    """
+    Aggregate swing-level composite treatment to (batter, stand) mean and compare
+    to the batter-level adjustability score from adjustability.parquet.
+    Pearson r should be >= CORR_WARN; prints a warning if not.
+    """
+    agg = (treats.groupby(KEY)["T_composite"].mean().rename("T_composite_agg").reset_index())
+    ref = pd.read_parquet(DATA / "adjustability.parquet", columns=KEY + ["adjustability"])
+    merged = agg.merge(ref, on=KEY, how="inner")
+    r = float(merged["T_composite_agg"].corr(merged["adjustability"]))
+    print(f"  Validation: swing-level composite vs batter-level adjustability r={r:.3f}  "
+          f"(n={len(merged)})")
+    if r < CORR_WARN:
+        print(f"  WARNING: r={r:.3f} < {CORR_WARN} — treatment construction may have diverged from intent")
+    return r
