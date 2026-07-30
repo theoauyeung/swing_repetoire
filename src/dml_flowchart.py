@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate DML process flowchart for adjustability_value methodology."""
+"""Generate DML process flowchart for adjustability_value methodology (swing-level DML)."""
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -15,9 +15,10 @@ C_GRAY   = "#5E5E5E"
 C_GREEN  = "#2CA02C"
 C_LIGHT  = "#C0C0C0"
 C_DARK   = "#2A2A2A"
+C_TEAL   = "#17BECF"
 WHITE    = "#FFFFFF"
 
-fig, ax = plt.subplots(figsize=(11, 13), facecolor=WHITE)
+fig, ax = plt.subplots(figsize=(11, 14), facecolor=WHITE)
 ax.set_facecolor(WHITE)
 ax.set_xlim(0, 1)
 ax.set_ylim(0, 1)
@@ -63,87 +64,120 @@ def badge(cx, cy, w, h, text):
 
 # ── Layout constants ─────────────────────────────────────────────────────────
 XL, XC, XR = 0.17, 0.50, 0.83
-H   = 0.090   # standard box height
-HB  = 0.120   # taller for confounders (3 sub-lines)
-WS  = 0.30    # side column width
-WC  = 0.25    # confounders width
-WI  = 0.58    # input bar
-WO  = 0.46    # output bar
+H    = 0.080   # standard box height
+HB   = 0.130   # confounders (4 sub-lines)
+HTR  = 0.115   # treatment construction (3 sub-lines)
+WS   = 0.30    # side column width
+WC   = 0.25    # confounders width
+WTR  = 0.42    # treatment construction width (wider to fit 3-line sub)
+WI   = 0.58    # input bar width
+WO   = 0.54    # output bar width
 
-YIN  = 0.895
-YCOL = 0.735
-YXGB = 0.560
-YRES = 0.385
-YOLS = 0.215
-YOUT = 0.062
+YIN  = 0.928
+YTRT = 0.788   # treatment construction (left-lane pre-step)
+YCOL = 0.628   # T | Confounders | Y
+YXGB = 0.464
+YRES = 0.312
+YOLS = 0.172
+YOUT = 0.047
 
 # ── Title ────────────────────────────────────────────────────────────────────
-ax.text(XC, 0.968,
+ax.text(XC, 0.974,
         "Double Machine Learning — Does Adjustability Improve Outcomes?",
         ha="center", va="center", fontsize=13, fontweight="bold",
         color=C_DARK, transform=ax.transAxes)
 
-# ── Boxes ────────────────────────────────────────────────────────────────────
+ax.text(XC, 0.953,
+        "Swing-level  ·  2024–25  ·  ~573k swings  ·  ≥ 400 per (batter, stand)",
+        ha="center", va="center", fontsize=9, color=C_GRAY,
+        transform=ax.transAxes)
+
+# ── Input ────────────────────────────────────────────────────────────────────
 draw_box(XC, YIN, WI, H,
          "Input Data",
-         "2024–25 MLB swings  ·  ≥ 400 swings per batter-stance",
+         "swings_model.parquet  ·  bat_speed · swing_length · swing_path_tilt · location · situation",
          fc=C_LIGHT, tc=C_DARK)
 
+# ── Treatment Construction (new pre-step, left lane) ─────────────────────────
+draw_box(XL, YTRT, WTR, HTR,
+         "Treatment Construction",
+         "5-fold within-batter cross-fitting per dial\n"
+         "dial ~ location surface + situation dummies\n"
+         "T = mean |fitted shift / dial SD|  (clipped ± 1.5 SD)",
+         fc=C_TEAL, tc=WHITE, fs=10.0, sub_dy=0.038)
+badge(XL, YTRT, WTR, HTR, "prevents self-contamination")
+
+# ── T | Confounders | Y ──────────────────────────────────────────────────────
 draw_box(XL, YCOL, WS, H,
-         "Adjustability  (T)",
-         "count · pitch-type · gamestate",
-         fc=C_BLUE, tc=WHITE)
+         "Shift magnitude  (T)",
+         "per-swing · unsigned\n"
+         "composite + 4 per-axis variants",
+         fc=C_BLUE, tc=WHITE, sub_dy=0.022)
 
 draw_box(XC, YCOL, WC, HB,
-         "Confounders",
-         "Swing+  ·  Repertoire+\npitcher quality  ·  whiff rate\nhandedness  ·  log swings",
-         fc=C_GRAY, tc=WHITE, fs=9.5, sub_dy=0.028)
+         "Confounders + Batter FE",
+         "location surface\n"
+         "count · game state · pitch type\n"
+         "pitcher quality\n"
+         "within-batter demeaning",
+         fc=C_GRAY, tc=WHITE, fs=9.0, sub_dy=0.042)
 
 draw_box(XR, YCOL, WS, H,
          "Outcome  (Y)",
-         "run value  ·  whiff rate",
-         fc=C_ORANGE, tc=WHITE)
+         "delta_run_exp  ·  is_whiff\n"
+         "all swings  or  two-strike subset",
+         fc=C_ORANGE, tc=WHITE, sub_dy=0.022)
 
+# ── XGBoost nuisance models ──────────────────────────────────────────────────
 draw_box(XL, YXGB, WS, H,
          "XGBoost: predict T",
          "from confounders",
          fc=C_BLUE, tc=WHITE)
-badge(XL, YXGB, WS, H, "5-fold cross-fitting")
+badge(XL, YXGB, WS, H, "GroupKFold on batter_id  ·  5 folds")
 
 draw_box(XR, YXGB, WS, H,
          "XGBoost: predict Y",
          "from confounders",
          fc=C_ORANGE, tc=WHITE)
-badge(XR, YXGB, WS, H, "5-fold cross-fitting")
+badge(XR, YXGB, WS, H, "GroupKFold on batter_id  ·  5 folds")
 
+# ── Residuals ────────────────────────────────────────────────────────────────
 draw_box(XL, YRES, WS, H,
          "T residual",
-         "adjustability unexplained\nby confounders",
+         "shift unexplained\nby confounders + batter FE",
          fc=C_BLUE, tc=WHITE)
 
 draw_box(XR, YRES, WS, H,
          "Y residual",
-         "outcome unexplained\nby confounders",
+         "outcome unexplained\nby confounders + batter FE",
          fc=C_ORANGE, tc=WHITE)
 
+# ── OLS ─────────────────────────────────────────────────────────────────────
 draw_box(XC, YOLS, 0.44, H,
          "OLS Regression",
          "Y residual ~ T residual",
          fc=C_DARK, tc=WHITE)
 
+# ── Output ───────────────────────────────────────────────────────────────────
 draw_box(XC, YOUT, WO, H,
          "θ — standardized causal effect",
-         "± sandwich SE  ·  p-value",
-         fc=C_GREEN, tc=WHITE, fs=11.5)
+         "± clustered sandwich SE (by batter)  ·  p-value",
+         fc=C_GREEN, tc=WHITE, fs=11.0)
 
 # ── Arrows ───────────────────────────────────────────────────────────────────
-# Input → Treatment / Confounders / Outcome
-arrow(XC - WI / 2 * 0.52, YIN - H / 2, XL, YCOL + H / 2,           C_BLUE)
-arrow(XC,                  YIN - H / 2, XC, YCOL + HB / 2,           C_GRAY)
-arrow(XC + WI / 2 * 0.52, YIN - H / 2, XR, YCOL + H / 2,            C_ORANGE)
+# Input → Treatment Construction (left lane)
+arrow(XC - WI / 2 * 0.52, YIN - H / 2, XL, YTRT + HTR / 2, C_TEAL)
+# Input → Confounders (center)
+arrow(XC,                  YIN - H / 2, XC, YCOL + HB / 2,  C_GRAY)
+# Input → Y (right)
+arrow(XC + WI / 2 * 0.52, YIN - H / 2, XR, YCOL + H / 2,   C_ORANGE)
 
-# Treatment / Outcome → XGBoost
+# Treatment Construction → T
+arrow(XL, YTRT - HTR / 2, XL, YCOL + H / 2, C_TEAL)
+
+# T → XGBoost T
 arrow(XL, YCOL - H / 2, XL, YXGB + H / 2, C_BLUE)
+# Y → XGBoost Y
 arrow(XR, YCOL - H / 2, XR, YXGB + H / 2, C_ORANGE)
 
 # Confounders → both XGBoost models (diagonal)
