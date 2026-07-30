@@ -46,8 +46,8 @@ SEED = 7
 
 SHAPE_FEATURES = ["swing_path_tilt", "swing_length", "bat_speed",
                   "vert_attack_angle", "horz_attack_angle_pull"]
-CONTEXT = ["balls", "strikes", "same_hand", "plate_x_pull", "plate_z_norm", "pitch_type"]
-FEATURES = SHAPE_FEATURES
+CONTEXT = [ "same_hand", "plate_x_pull", "plate_z_norm", "pitch_type"]
+FEATURES = CONTEXT + SHAPE_FEATURES
 
 HIT_OUTCOMES = {"home_run": "home_run", "triple": "triple", "double": "double", "single": "single"}
 
