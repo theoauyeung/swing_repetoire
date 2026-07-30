@@ -73,7 +73,7 @@ WTR  = 0.42    # treatment construction width (wider to fit 3-line sub)
 WI   = 0.58    # input bar width
 WO   = 0.54    # output bar width
 
-YIN  = 0.928
+YIN  = 0.916
 YTRT = 0.788   # treatment construction (left-lane pre-step)
 YCOL = 0.628   # T | Confounders | Y
 YXGB = 0.464
@@ -82,12 +82,12 @@ YOLS = 0.172
 YOUT = 0.047
 
 # ── Title ────────────────────────────────────────────────────────────────────
-ax.text(XC, 0.974,
+ax.text(XC, 0.982,
         "Double Machine Learning — Does Adjustability Improve Outcomes?",
         ha="center", va="center", fontsize=13, fontweight="bold",
         color=C_DARK, transform=ax.transAxes)
 
-ax.text(XC, 0.953,
+ax.text(XC, 0.966,
         "Swing-level  ·  2024–25  ·  ~573k swings  ·  ≥ 400 per (batter, stand)",
         ha="center", va="center", fontsize=9, color=C_GRAY,
         transform=ax.transAxes)
@@ -133,13 +133,19 @@ draw_box(XL, YXGB, WS, H,
          "XGBoost: predict T",
          "from confounders",
          fc=C_BLUE, tc=WHITE)
-badge(XL, YXGB, WS, H, "GroupKFold on batter_id  ·  5 folds")
+ax.text(XL + WS / 2 - 0.006, YXGB - H / 2 - 0.006,
+        "GroupKFold on batter_id  ·  5 folds",
+        ha="right", va="top", fontsize=7.5, style="italic",
+        color="#555555", transform=ax.transAxes, zorder=4)
 
 draw_box(XR, YXGB, WS, H,
          "XGBoost: predict Y",
          "from confounders",
          fc=C_ORANGE, tc=WHITE)
-badge(XR, YXGB, WS, H, "GroupKFold on batter_id  ·  5 folds")
+ax.text(XR + WS / 2 - 0.006, YXGB - H / 2 - 0.006,
+        "GroupKFold on batter_id  ·  5 folds",
+        ha="right", va="top", fontsize=7.5, style="italic",
+        color="#555555", transform=ax.transAxes, zorder=4)
 
 # ── Residuals ────────────────────────────────────────────────────────────────
 draw_box(XL, YRES, WS, H,
