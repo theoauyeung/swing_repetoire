@@ -70,27 +70,20 @@ HTR  = 0.115   # treatment construction (3 sub-lines)
 WS   = 0.30    # side column width
 WC   = 0.25    # confounders width
 WTR  = 0.42    # treatment construction width (wider to fit 3-line sub)
-WI   = 0.58    # input bar width
 WO   = 0.54    # output bar width
 
-YIN  = 0.916
-YTRT = 0.788   # treatment construction (left-lane pre-step)
-YCOL = 0.628   # T | Confounders | Y
-YXGB = 0.464
-YRES = 0.312
-YOLS = 0.172
-YOUT = 0.047
+YTRT = 0.886   # treatment construction (left-lane pre-step)
+YCOL = 0.743   # T | Confounders | Y
+YXGB = 0.579
+YRES = 0.427
+YOLS = 0.287
+YOUT = 0.162
 
 # ── Title ────────────────────────────────────────────────────────────────────
 ax.text(XC, 0.974,
         "Swing-level  ·  2024–25  ·  ~573k swings  ·  ≥ 400 per (batter, stand)",
         ha="center", va="center", fontsize=9, color=C_GRAY,
         transform=ax.transAxes)
-
-# ── Input ────────────────────────────────────────────────────────────────────
-draw_box(XC, YIN, WI, H,
-         "swings_model.parquet  ·  bat_speed · swing_length · swing_path_tilt · location · situation",
-         fc=C_LIGHT, tc=C_DARK, fs=9.0)
 
 # ── Treatment Construction (new pre-step, left lane) ─────────────────────────
 draw_box(XL, YTRT, WTR, HTR,
@@ -99,7 +92,6 @@ draw_box(XL, YTRT, WTR, HTR,
          "dial ~ location surface + situation dummies\n"
          "T = mean |fitted shift / dial SD|  (clipped ± 1.5 SD)",
          fc=C_TEAL, tc=WHITE, fs=10.0, sub_dy=0.038)
-badge(XL, YTRT, WTR, HTR, "prevents self-contamination")
 
 # ── T | Confounders | Y ──────────────────────────────────────────────────────
 draw_box(XL, YCOL, WS, H,
@@ -165,13 +157,6 @@ draw_box(XC, YOUT, WO, H,
          fc=C_GREEN, tc=WHITE, fs=11.0)
 
 # ── Arrows ───────────────────────────────────────────────────────────────────
-# Input → Treatment Construction (left lane)
-arrow(XC - WI / 2 * 0.52, YIN - H / 2, XL, YTRT + HTR / 2, C_TEAL)
-# Input → Confounders (center)
-arrow(XC,                  YIN - H / 2, XC, YCOL + HB / 2,  C_GRAY)
-# Input → Y (right)
-arrow(XC + WI / 2 * 0.52, YIN - H / 2, XR, YCOL + H / 2,   C_ORANGE)
-
 # Treatment Construction → T
 arrow(XL, YTRT - HTR / 2, XL, YCOL + H / 2, C_TEAL)
 
