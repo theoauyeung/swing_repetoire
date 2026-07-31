@@ -82,12 +82,7 @@ YOLS = 0.172
 YOUT = 0.047
 
 # ── Title ────────────────────────────────────────────────────────────────────
-ax.text(XC, 0.982,
-        "Double Machine Learning — Does Adjustability Improve Outcomes?",
-        ha="center", va="center", fontsize=13, fontweight="bold",
-        color=C_DARK, transform=ax.transAxes)
-
-ax.text(XC, 0.966,
+ax.text(XC, 0.974,
         "Swing-level  ·  2024–25  ·  ~573k swings  ·  ≥ 400 per (batter, stand)",
         ha="center", va="center", fontsize=9, color=C_GRAY,
         transform=ax.transAxes)
