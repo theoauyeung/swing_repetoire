@@ -94,9 +94,8 @@ ax.text(XC, 0.966,
 
 # ── Input ────────────────────────────────────────────────────────────────────
 draw_box(XC, YIN, WI, H,
-         "Input Data",
          "swings_model.parquet  ·  bat_speed · swing_length · swing_path_tilt · location · situation",
-         fc=C_LIGHT, tc=C_DARK)
+         fc=C_LIGHT, tc=C_DARK, fs=9.0)
 
 # ── Treatment Construction (new pre-step, left lane) ─────────────────────────
 draw_box(XL, YTRT, WTR, HTR,
