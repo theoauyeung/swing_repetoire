@@ -50,7 +50,7 @@ Order: extract → features → cluster → xrv (built). `interpret.py` and `car
 
 `src/leaderboard_table.R` writes presentation-grade Swing+ / Repertoire+ / Adjustability leaderboard PNGs using R (gt + mlbplotR). `batter_id` is the MLBAM id `gt_fmt_mlb_headshot()` keys on. Run `Rscript src/leaderboard_table.R` from repo root; it reads `data/*.parquet` and writes `results/plots/{swingplus,repertoire,adjustability}_leaderboard_gt.png` (+ `*_bottom_gt.png`).
 
-`swing+_results.ipynb` displays the Swing+/Repertoire+ PNGs. `adjustability_results.ipynb` opens with a 2-panel location-confound defense figure (`adjustability_location_confound.png`: (A) mean swing tilt across the zone shows location sets the swing; (B) 2-strike-minus-early pitch density shows location shifts with the count), then displays the adjustability leaderboard and the DML value finding as a 4-bar coefficient chart (`adjustability_payoff_coeffs.png`: count- vs pitch-adjustment standardized DML θ on the two-strike whiff and run-value outcomes, parsed from `results/adjustability_value.md` — count axis protective on whiff (θ=−0.365, p<0.001), run value null under DML, pitch n.s. on both).
+`swing+_results.ipynb` displays the Swing+/Repertoire+ PNGs. `adjustability_results.ipynb` opens with a 2-panel location-confound defense figure (`adjustability_location_confound.png`: (A) mean swing tilt across the zone shows location sets the swing; (B) 2-strike-minus-early pitch density shows location shifts with the count), then displays the adjustability leaderboard and the DML value finding as a coefficient chart (`adjustability_payoff_coeffs.png`: adjustment axes vs two-strike whiff and run-value outcomes from swing-level DML, parsed from `results/adjustability_value.md` — count/gamestate/platoon axes protective on two-strike whiff; run value null under DML across all axes).
 
 R 4.6.0 lives at `/usr/local/bin/Rscript` (on PATH on macOS); packages arrow/dplyr/gt/gtExtras/mlbplotR/scales/webshot2 are installed. `gtsave()` PNG export needs headless Chrome (webshot2), which works in this env.
 
@@ -74,11 +74,11 @@ Why v4 is better: v3's global surface let pitch-movement-correlated-with-locatio
 
 ### Adjustability value
 
-`src/adjustability_value.py` → `results/adjustability_value.md`. DML causal estimates (Robinson 1988 partial linear model; XGBoost nuisance models, 5-fold cross-fitting; SE from influence-function sandwich estimator). Outcome is realized RV (`delta_run_exp`); `xrv` excluded to avoid circularity. Confounders: swing quality, log playing time, repertoire width, batter handedness, pitcher quality faced (swing-weighted mean pitcher delta_run_exp), contact rate.
+`src/adjustability_value.py` → `results/adjustability_value.md`. Swing-level DML (n~573k swings season-wide, ~217k two-strike). Treatment = per-swing fitted situational shift magnitude from within-batter 5-fold cross-fitting, averaged across 3 dials. Robinson (1988) partial linear model; XGBoost nuisance models (GroupKFold on batter_id, 5 folds); within-batter demeaning for batter FE; clustered sandwich SE. Outcome is realized RV (`delta_run_exp`) and whiff; `xrv` excluded. Confounders: location surface, count, game state, pitch group, platoon, pitcher quality; batter-level traits absorbed by demeaning.
 
-Season-wide: null across all axes and both outcomes (n=450) — rules out "adjusters are just good hitters." Two-strike (n=471): `adj_count` → far fewer whiffs (θ=−0.365, p<0.001); run value null under DML once pitcher quality is controlled (θ=+0.025, p=0.52). `adj_pitch`, `adj_gamestate`, `adj_platoon` all null on both outcomes. The protective signal is whiff reduction at two strikes via count adjustment specifically.
+Season-wide: composite adjustability null on both outcomes — rules out "adjusters are just good hitters." `adj_count` is NOT null season-wide: reduces whiffs (θ=−0.026, p<0.001) and slightly improves run value (θ=+0.008, p=0.001) — adjusting to the count helps even outside two-strike situations. Two-strike: `adj_count` (θ=−0.009, p=0.003), `adj_gamestate` (θ=−0.008, p=0.005), and `adj_platoon` (θ=−0.009, p=0.013) all reduce two-strike whiffs. Run value null across all axes at two strikes once pitcher quality is controlled. `adj_pitch` null at conventional thresholds in both scopes.
 
-Adjustability is a two-strike contact-preservation skill. The whiff finding is robust; run value at two strikes cannot be separated from pitcher quality in the current data.
+Adjustability is a multi-axis contact-preservation skill at two strikes. The whiff finding is robust across count, game-state, and platoon axes; run value cannot be separated from pitcher quality in the current data.
 
 ### Archetype lexicon
 
