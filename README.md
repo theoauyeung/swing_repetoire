@@ -13,7 +13,6 @@ Data: Driveline `mlb_db`. Full methodology: `docs/research-design.md` (not in th
 
 A per-batter GMM groups each hitter's swings into distinct shapes (median: 2, max: 6). An xRV model grades each shape in context and scales it as Swing+ (50 = league average). Repertoire+ measures how wide a hitter's shape portfolio is across 5 dimensions, weighted by usage. Adjustability measures how much bat speed, swing length, and tilt track the situation, net of where the pitch is.
 
-The main finding: adjustability is a two-strike skill. Hitters who adjust by count give back less run value at two strikes (β = +0.17, p = 0.0001) and whiff less (β = −0.39, p < 1e-8). Season-wide, swing quality and playing time dominate. Raw repertoire width, if anything, hurts at two strikes (β = −0.15, p = 0.001).
 
 ## Pipeline
 
