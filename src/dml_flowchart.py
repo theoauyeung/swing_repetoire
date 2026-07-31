@@ -88,9 +88,9 @@ ax.text(XC, 0.974,
 # ── Treatment Construction (new pre-step, left lane) ─────────────────────────
 draw_box(XL, YTRT, WTR, HTR,
          "Treatment Construction",
-         "5-fold within-batter cross-fitting per dial\n"
-         "dial ~ location surface + situation dummies\n"
-         "T = mean |fitted shift / dial SD|  (clipped ± 1.5 SD)",
+         "5-fold within-batter cross-fitting per metric\n"
+         "metric ~ location surface + situation dummies\n"
+         "T = mean |fitted shift / metric SD|  (clipped ± 1.5 SD)",
          fc=C_TEAL, tc=WHITE, fs=10.0, sub_dy=0.038)
 
 # ── T | Confounders | Y ──────────────────────────────────────────────────────
