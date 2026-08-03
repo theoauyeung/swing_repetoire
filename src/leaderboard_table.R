@@ -229,7 +229,7 @@ make_leaderboard(tail(adj_pool, TOP_N) |> select(all_of(adj_cols)),
 # ── ADJValue leaderboard (unit = batter x stand) ─────────────────────────────────────────────────
 # Reads data/adjustability.parquet (written by src/adjustability_value.py).
 # ADJValue = 50+10·z composite of 2K matched run value + 2K whiff resilience (the only axes with
-# a significant OLS payoff). Multi-axis context columns (RISP, DP, platoon) shown alongside.
+# a significant OLS payoff). Multi-axis context columns (any-runner game-state, platoon) shown alongside.
 
 val_raw <- read_parquet("data/adjustability.parquet",
                         col_select = c("batter_id", "batter_stand", "label",
