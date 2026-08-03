@@ -50,7 +50,7 @@ Order: extract → features → cluster → xrv (built). `interpret.py` and `car
 
 `src/leaderboard_table.R` writes presentation-grade Swing+ / Repertoire+ / Adjustability leaderboard PNGs using R (gt + mlbplotR). `batter_id` is the MLBAM id `gt_fmt_mlb_headshot()` keys on. Run `Rscript src/leaderboard_table.R` from repo root; it reads `data/*.parquet` and writes `results/plots/{swingplus,repertoire,adjustability}_leaderboard_gt.png` (+ `*_bottom_gt.png`).
 
-`swing+_results.ipynb` displays the Swing+/Repertoire+ PNGs. `adjustability_results.ipynb` opens with a 2-panel location-confound defense figure (`adjustability_location_confound.png`: (A) mean swing tilt across the zone shows location sets the swing; (B) 2-strike-minus-early pitch density shows location shifts with the count), then displays the adjustability leaderboard and the multi-axis OLS payoff chart (`adjustability_payoff_coeffs.png`: four situational penalties — two-strike, RISP+0out, DP-avoidance, arm-side platoon — each regressed on its corresponding axis, parsed from `results/adjustability_value.md`; only `adj_count` is significant, game-state and platoon null).
+`swing+_results.ipynb` displays the Swing+/Repertoire+ PNGs. `adjustability_results.ipynb` opens with a 2-panel location-confound defense figure (`adjustability_location_confound.png`: (A) mean swing tilt across the zone shows location sets the swing; (B) 2-strike-minus-early pitch density shows location shifts with the count), then displays the adjustability leaderboard and the multi-axis OLS payoff chart (`adjustability_payoff_coeffs.png`: three situational penalties — two-strike, any-runner game-state, arm-side platoon — each regressed on its corresponding axis, parsed from `results/adjustability_value.md`; only `adj_count` is significant, game-state and platoon null).
 
 R 4.6.0 lives at `/usr/local/bin/Rscript` (on PATH on macOS); packages arrow/dplyr/gt/gtExtras/mlbplotR/scales/webshot2 are installed. `gtsave()` PNG export needs headless Chrome (webshot2), which works in this env.
 
@@ -77,14 +77,13 @@ Why v4 is better: v3's global surface let pitch-movement-correlated-with-locatio
 `src/adjustability_value.py` updates `data/adjustability.parquet` and writes `results/adjustability_value.md`. Three sections:
 
 **Section 1 — Multi-axis matched penalties** (output columns added to `adjustability.parquet`):
-Four situational penalties, all using realized `delta_run_exp` (not `xrv_grade`):
+Three situational penalties, all using realized `delta_run_exp` (not `xrv_grade`):
 - `twostrike_rv_penalty`: 2-strike vs 0-1 strike within (pitch_type × zone) — n=471 units
-- `risp_0out_rv_penalty`: RISP+0-outs vs empty within (pitch_type × zone × strikes) — n=267
-- `dp_rv_penalty`: 1B-only+<2-outs vs empty within (pitch_type × zone × strikes) — n=428
-- `platoon_rv_penalty`: same-hand vs opp-hand within (pitch_type × zone × strikes) — n=400
-Also adds `swing_plus` (mean `xrv_grade_neutral`). All penalties use `delta_run_exp` to sidestep the count mechanics in `xrv_grade` (rv_whiff at 2 strikes ≈ −0.25 vs −0.04 at 0-0). Game-state and platoon penalties include strikes in the matching cell to hold count fixed.
+- `gamestate_rv_penalty`: any runner vs empty within (pitch_type × zone × strikes) — n=471. Replaces the earlier RISP+0-out (n=267) and DP-avoid (n=428) split, which cut power unnecessarily; "any runner" aligns with how `adj_gamestate` is constructed (base_state = risp|on1|empty) and restores full coverage.
+- `platoon_rv_penalty`: same-hand vs opp-hand within (pitch_type × zone × strikes) — n=400. Switch-hitter units excluded: within a (batter_id, batter_stand) unit, switch hitters face near-exclusively opposite-hand pitchers (same_hand ≈ 0%), so those units don't survive the ≥3/≥3 cell filter.
+Also adds `swing_plus` (mean `xrv_grade_neutral`). All penalties use `delta_run_exp` to sidestep count mechanics in `xrv_grade`. Game-state and platoon penalties include strikes in the matching cell to hold count fixed.
 
-**Section 2 — Between-batter OLS** (primary): each penalty regressed on its corresponding axis (+ `swing_plus` + `repertoire_pctile`), all z-scored, clustered SE by batter_id. `adj_pitch` excluded — pitch type is reactive, not a pre-pitch volitional lever. **Key findings (2026-08-03):** only count axis has a significant payoff: `adj_count` θ=+0.145 (SE=0.040, t=3.64, p=0.0003) on `twostrike_rv_penalty`. Game-state (RISP p=0.08, DP p=0.20) and platoon (p=0.83) are null — mechanical adjustment is real but doesn't translate to detectable run-value benefits in these matched tests.
+**Section 2 — Between-batter OLS** (primary): each penalty regressed on its corresponding axis (+ `swing_plus` + `repertoire_pctile`), all z-scored, clustered SE by batter_id. `adj_pitch` excluded — pitch type is reactive, not a pre-pitch volitional lever. **Key findings (2026-08-03):** only count axis has a significant payoff: `adj_count` θ=+0.145 (SE=0.040, t=3.64, p=0.0003) on `twostrike_rv_penalty`. Game-state (any runner, p=0.13) and platoon (p=0.83) are null — mechanical adjustment is real but doesn't translate to detectable run-value benefits in these matched tests.
 
 **Section 3 — Swing-level DML** (fallback, kept for robustness): Robinson (1988) partial linear model with within-batter FE, XGBoost nuisance models, GroupKFold on batter_id. Known limitation: per-axis treatments (T_count, T_pitch) share variables with the confounder set, which may inflate r2_T and compress θ. Run `python src/adjustability_value.py` to append DML results (~30 min).
 

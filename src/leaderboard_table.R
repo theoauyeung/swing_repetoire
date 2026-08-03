@@ -227,88 +227,91 @@ make_leaderboard(tail(adj_pool, TOP_N) |> select(all_of(adj_cols)),
                  fig_path("adjustability_bottom_gt.png"), width = 820)
 
 # ── ADJValue leaderboard (unit = batter x stand) ─────────────────────────────────────────────────
-# Reads data/twostrike_penalties.parquet (written by the adjustability_results.ipynb computation cell).
-# ADJValue = z-score composite of two_strike_rv_delta and -two_strike_whiff_delta (both flipped so
-# higher = better). Ranked by ADJValue; adjustability shown alongside as context.
+# Reads data/adjustability.parquet (written by src/adjustability_value.py).
+# ADJValue = 50+10·z composite of 2K matched run value + 2K whiff resilience (the only axes with
+# a significant OLS payoff). Multi-axis context columns (RISP, DP, platoon) shown alongside.
 
-if (file.exists("data/twostrike_penalties.parquet")) {
-  val_raw <- read_parquet("data/twostrike_penalties.parquet",
-                          col_select = c("batter_id", "batter_stand", "label",
-                                         "adj_count", "two_strike_rv_delta",
-                                         "two_strike_whiff_delta", "swing_plus")) |>
-    left_join(read_parquet("data/adjustability.parquet",
-                            col_select = c("batter_id", "batter_stand", "adjustability_plus")),
-              by = c("batter_id", "batter_stand")) |>
-    filter(!is.na(adjustability_plus)) |>
-    mutate(
-      rv_z      = as.numeric(scale(two_strike_rv_delta)),
-      whiff_z   = -as.numeric(scale(two_strike_whiff_delta)),
-      raw_val   = (rv_z + whiff_z) / 2,
-      ADJValue  = round(pmax(0, pmin(100, 50 + 10 * as.numeric(scale(raw_val)))), 1),
-      AdjPlus   = round(adjustability_plus, 1),
-      MatchedRV = round(two_strike_rv_delta, 4),
-      Whiff2K   = round(two_strike_whiff_delta, 3),
-      SwingPlus = round(swing_plus, 1)
-    ) |>
-    arrange(desc(ADJValue)) |>
-    mutate(Rank = row_number())
+val_raw <- read_parquet("data/adjustability.parquet",
+                        col_select = c("batter_id", "batter_stand", "label",
+                                       "adj_count", "adjustability_plus",
+                                       "twostrike_rv_penalty", "twostrike_whiff_penalty",
+                                       "gamestate_rv_penalty", "platoon_rv_penalty",
+                                       "swing_plus")) |>
+  filter(!is.na(twostrike_rv_penalty), !is.na(adjustability_plus)) |>
+  mutate(
+    rv_z      = as.numeric(scale(twostrike_rv_penalty)),
+    whiff_z   = -as.numeric(scale(twostrike_whiff_penalty)),
+    raw_val   = (rv_z + whiff_z) / 2,
+    ADJValue  = round(pmax(0, pmin(100, 50 + 10 * as.numeric(scale(raw_val)))), 1),
+    AdjPlus   = round(adjustability_plus, 1),
+    MatchedRV = round(twostrike_rv_penalty, 4),
+    Whiff2K   = round(twostrike_whiff_penalty, 3),
+    GameState = round(gamestate_rv_penalty, 4),
+    Platoon   = round(platoon_rv_penalty, 4),
+    SwingPlus = round(swing_plus, 1)
+  ) |>
+  arrange(desc(ADJValue)) |>
+  mutate(Rank = row_number())
 
-  n_pool      <- nrow(val_raw)
-  pal_adjval  <- col_numeric(PAL_COLS, domain = range(val_raw$ADJValue))
+n_pool      <- nrow(val_raw)
+pal_adjval  <- col_numeric(PAL_COLS, domain = range(val_raw$ADJValue))
 
-  val_cols   <- c("Rank", "batter_id", "label", "batter_stand", "ADJValue", "AdjPlus", "MatchedRV", "Whiff2K", "SwingPlus")
-  val_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
-                     ADJValue = "ADJValue+", AdjPlus = "Adjustability+",
-                     MatchedRV = "2K Δ run value", Whiff2K = "2K Δ whiff", SwingPlus = "Swing+")
-  val_align  <- c("Rank", "batter_stand", "ADJValue", "AdjPlus", "MatchedRV", "Whiff2K", "SwingPlus")
-  val_foot   <- paste0(
-    "n=", n_pool, " qualified units (≥400 swings, 2024-25). ",
-    "ADJValue+ = 50+10·z composite of 2K matched run value + 2K whiff resilience (50 = avg; higher = better).")
+val_cols   <- c("Rank", "batter_id", "label", "batter_stand", "ADJValue", "AdjPlus",
+                "MatchedRV", "Whiff2K", "GameState", "Platoon", "SwingPlus")
+val_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
+                   ADJValue = "ADJValue+", AdjPlus = "Adjustability+",
+                   MatchedRV = "2K Δ RV", Whiff2K = "2K Δ whiff",
+                   GameState = "Runner Δ RV", Platoon = "Platoon Δ RV",
+                   SwingPlus = "Swing+")
+val_align  <- c("Rank", "batter_stand", "ADJValue", "AdjPlus",
+                "MatchedRV", "Whiff2K", "GameState", "Platoon", "SwingPlus")
+val_foot   <- paste0(
+  "n=", n_pool, " qualified units (≥400 swings, 2024-25). ",
+  "ADJValue+ = 50+10·z composite of 2K matched RV + 2K whiff resilience. ",
+  "Runner/Platoon columns show context-only Δ run value (null in OLS). ",
+  "Platoon excludes switch-hitter units (near-zero same-hand exposure within unit).")
 
-  top_val <- val_raw |> head(TOP_N)
-  bot_val <- val_raw |> tail(TOP_N) |> arrange(ADJValue) |> mutate(Rank = row_number())
+top_val <- val_raw |> head(TOP_N)
+bot_val <- val_raw |> tail(TOP_N) |> arrange(ADJValue) |> mutate(Rank = row_number())
 
-  make_leaderboard(top_val |> select(all_of(val_cols)),
-                   "ADJValue", pal_adjval, val_labels, val_align,
-                   "**ADJValue+ Leaderboard — Leaders**",
-                   sprintf("Most value from adjustability (50 = avg)  &middot;  n=%d  &middot;  color = ADJValue+", n_pool),
-                   fig_path("adjustability_value_top_gt.png"), footnote = val_foot, width = 950)
+make_leaderboard(top_val |> select(all_of(val_cols)),
+                 "ADJValue", pal_adjval, val_labels, val_align,
+                 "**ADJValue+ Leaderboard — Leaders**",
+                 sprintf("Most value from adjustability (50 = avg)  &middot;  n=%d  &middot;  color = ADJValue+", n_pool),
+                 fig_path("adjustability_value_top_gt.png"), footnote = val_foot, width = 1150)
 
-  make_leaderboard(bot_val |> select(all_of(val_cols)),
-                   "ADJValue", pal_adjval, val_labels, val_align,
-                   "**ADJValue+ Leaderboard — Worst Performers**",
-                   sprintf("Least value from adjustability  &middot;  same pool (n=%d)  &middot;  color = ADJValue+", n_pool),
-                   fig_path("adjustability_value_bottom_gt.png"), footnote = val_foot, width = 950)
+make_leaderboard(bot_val |> select(all_of(val_cols)),
+                 "ADJValue", pal_adjval, val_labels, val_align,
+                 "**ADJValue+ Leaderboard — Worst Performers**",
+                 sprintf("Least value from adjustability  &middot;  same pool (n=%d)  &middot;  color = ADJValue+", n_pool),
+                 fig_path("adjustability_value_bottom_gt.png"), footnote = val_foot, width = 1150)
 
-  # ── Residuals: high Adj+ / low ADJValue+ and low Adj+ / high ADJValue+ (top 5 each) ────────────
-  val_fit  <- lm(ADJValue ~ AdjPlus, data = val_raw)
-  val_res  <- val_raw |> mutate(ADJResid = round(residuals(val_fit), 1))
+# ── Residuals: high Adj+ / low ADJValue+ and low Adj+ / high ADJValue+ (top 5 each) ────────────
+val_fit  <- lm(ADJValue ~ AdjPlus, data = val_raw)
+val_res  <- val_raw |> mutate(ADJResid = round(residuals(val_fit), 1))
 
-  pal_resid   <- col_numeric(PAL_COLS, domain = range(val_res$ADJResid))
-  resid_cols  <- c("Rank", "batter_id", "label", "batter_stand", "AdjPlus", "ADJValue", "ADJResid", "MatchedRV", "Whiff2K", "SwingPlus")
-  resid_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
-                       AdjPlus = "Adjustability+", ADJValue = "ADJValue+", ADJResid = "Residual",
-                       MatchedRV = "2K Δ run value", Whiff2K = "2K Δ whiff", SwingPlus = "Swing+")
-  resid_align  <- c("Rank", "batter_stand", "AdjPlus", "ADJValue", "ADJResid", "MatchedRV", "Whiff2K", "SwingPlus")
-  resid_foot   <- paste0("Residual = actual ADJValue+ minus expected from linear fit on Adjustability+. n=", n_pool, " pool.")
+pal_resid    <- col_numeric(PAL_COLS, domain = range(val_res$ADJResid))
+resid_cols   <- c("Rank", "batter_id", "label", "batter_stand", "AdjPlus", "ADJValue", "ADJResid",
+                  "MatchedRV", "Whiff2K", "SwingPlus")
+resid_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
+                     AdjPlus = "Adjustability+", ADJValue = "ADJValue+", ADJResid = "Residual",
+                     MatchedRV = "2K Δ RV", Whiff2K = "2K Δ whiff", SwingPlus = "Swing+")
+resid_align  <- c("Rank", "batter_stand", "AdjPlus", "ADJValue", "ADJResid", "MatchedRV", "Whiff2K", "SwingPlus")
+resid_foot   <- paste0("Residual = actual ADJValue+ minus expected from linear fit on Adjustability+. n=", n_pool, " pool.")
 
-  high_adj_low_val <- val_res |> arrange(ADJResid)       |> head(5) |> mutate(Rank = row_number())
-  low_adj_high_val <- val_res |> arrange(desc(ADJResid)) |> head(5) |> mutate(Rank = row_number())
+high_adj_low_val <- val_res |> arrange(ADJResid)       |> head(5) |> mutate(Rank = row_number())
+low_adj_high_val <- val_res |> arrange(desc(ADJResid)) |> head(5) |> mutate(Rank = row_number())
 
-  make_leaderboard(high_adj_low_val |> select(all_of(resid_cols)),
-                   "ADJResid", pal_resid, resid_labels, resid_align,
-                   "**High Adjustability+, Low ADJValue+**",
-                   sprintf("Skilled adjusters not translating to outcomes  &middot;  n=%d pool", n_pool),
-                   fig_path("adjustability_resid_high_adj_low_val_gt.png"), footnote = resid_foot, width = 1000)
+make_leaderboard(high_adj_low_val |> select(all_of(resid_cols)),
+                 "ADJResid", pal_resid, resid_labels, resid_align,
+                 "**High Adjustability+, Low ADJValue+**",
+                 sprintf("Skilled adjusters not translating to outcomes  &middot;  n=%d pool", n_pool),
+                 fig_path("adjustability_resid_high_adj_low_val_gt.png"), footnote = resid_foot, width = 1000)
 
-  make_leaderboard(low_adj_high_val |> select(all_of(resid_cols)),
-                   "ADJResid", pal_resid, resid_labels, resid_align,
-                   "**Low Adjustability+, High ADJValue+**",
-                   sprintf("Two-strike outcomes without the measured skill  &middot;  n=%d pool", n_pool),
-                   fig_path("adjustability_resid_low_adj_high_val_gt.png"), footnote = resid_foot, width = 1000)
-} else {
-  cat("Skipping ADJValue leaderboard: data/twostrike_penalties.parquet not found.\n",
-      "Run the ‘Two-strike outcome gap’ cell in adjustability_results.ipynb first.\n")
-}
+make_leaderboard(low_adj_high_val |> select(all_of(resid_cols)),
+                 "ADJResid", pal_resid, resid_labels, resid_align,
+                 "**Low Adjustability+, High ADJValue+**",
+                 sprintf("Two-strike outcomes without the measured skill  &middot;  n=%d pool", n_pool),
+                 fig_path("adjustability_resid_low_adj_high_val_gt.png"), footnote = resid_foot, width = 1000)
 
 cat("done\n")
