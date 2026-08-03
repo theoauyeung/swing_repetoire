@@ -130,6 +130,46 @@ def assemble_xrv(swings_df, prob_bip, prob_foul, value_bip, run_value_tables):
     return bip_component + non_bip_component
 
 
+def compute_neutral_run_values(swings_df, run_value_tables):
+    """
+    Count-weighted average run values for a count-neutral xRV.
+
+    The ML models (p_bip, p_foul, v_bip) already have no count in their CONTEXT.
+    The only count-sensitivity in xRV is the run-value layer: rv_whiff at 2 strikes
+    is lw_K − ERV(b,2) ≈ −0.25 to −0.45, versus a small advance cost at 0−1 strikes.
+    Replacing per-count values with their empirical frequency-weighted averages yields
+    xrv_neutral — a count-invariant swing quality measure suitable as a Swing+ control
+    when comparing 2-strike and early-count outcomes.
+
+    Weights = empirical count frequency across all swings in swings_df.
+    Returns scalar dict: erv_neutral, rv_whiff_neutral, rv_foul_neutral.
+    """
+    count_counts = swings_df.groupby(["balls", "strikes"]).size()
+    total        = count_counts.sum()
+    weights      = (count_counts / total).to_dict()
+
+    erv_neutral       = sum(weights.get((b, s), 0.0) * v
+                            for (b, s), v in run_value_tables["erv"].items())
+    rv_whiff_neutral  = sum(weights.get((b, s), 0.0) * v
+                            for (b, s), v in run_value_tables["rv_whiff"].items())
+    rv_foul_neutral   = sum(weights.get((b, s), 0.0) * v
+                            for (b, s), v in run_value_tables["rv_foul"].items())
+    return {
+        "erv_neutral":      float(erv_neutral),
+        "rv_whiff_neutral": float(rv_whiff_neutral),
+        "rv_foul_neutral":  float(rv_foul_neutral),
+    }
+
+
+def assemble_xrv_neutral(prob_bip, prob_foul, value_bip, neutral_rv):
+    """Count-neutral xRV: same ML models, league-average run values instead of per-count."""
+    erv   = neutral_rv["erv_neutral"]
+    r_wh  = neutral_rv["rv_whiff_neutral"]
+    r_fo  = neutral_rv["rv_foul_neutral"]
+    return (prob_bip * (value_bip - erv)
+            + (1.0 - prob_bip) * (prob_foul * r_fo + (1.0 - prob_foul) * r_wh))
+
+
 def realized_run_value(swings_df, run_value_tables):
     """The tables' *realized* per-swing run value (actual outcome), for validation vs delta_run_exp."""
     count_states         = list(zip(swings_df["balls"], swings_df["strikes"]))
@@ -203,13 +243,24 @@ def main():
     output_df["xrv"]         = assemble_xrv(all_swings, prob_bip_all, prob_foul_all, value_bip_all, run_value_tables)
     output_df["realized_rv"] = realized_run_value(all_swings, run_value_tables)
 
-    # 0-100 swing grade: z-score the expected xRV across all swings, center at 50 (10 pts / SD),
-    # clip to [0, 100]. 50 = league-average swing; >50 better, <50 worse.
+    # Standard grade: count-inclusive run-value layer (suitable for Swing+ leaderboard).
     xrv_mean    = output_df["xrv"].mean()
     xrv_std     = output_df["xrv"].std()
-    xrv_zscore  = (output_df["xrv"] - xrv_mean) / xrv_std
-    output_df["xrv_grade"] = (50 + 10 * xrv_zscore).clip(0, 100)
+    output_df["xrv_grade"] = (50 + 10 * (output_df["xrv"] - xrv_mean) / xrv_std).clip(0, 100)
+
+    # Count-neutral grade: same ML models, league-average run values instead of per-count.
+    # Use this as the Swing+ control in between-batter regressions that also use count-stratified
+    # outcomes (e.g. twostrike_rv_penalty), so the control doesn't absorb the count effect.
+    neutral_rv = compute_neutral_run_values(train_swings, run_value_tables)
+    xrv_neutral = assemble_xrv_neutral(prob_bip_all, prob_foul_all, value_bip_all, neutral_rv)
+    xrv_neutral_mean = xrv_neutral.mean()
+    xrv_neutral_std  = xrv_neutral.std()
+    output_df["xrv_neutral"]       = xrv_neutral
+    output_df["xrv_grade_neutral"] = (50 + 10 * (xrv_neutral - xrv_neutral_mean) / xrv_neutral_std).clip(0, 100)
+
     output_df.to_parquet(DATA / "xrv_swings.parquet", index=False)
+    print(f"  xrv_grade         mean={output_df.xrv_grade.mean():.2f}  std={output_df.xrv_grade.std():.2f}")
+    print(f"  xrv_grade_neutral mean={output_df.xrv_grade_neutral.mean():.2f}  std={output_df.xrv_grade_neutral.std():.2f}")
 
     # ---- validation gate: do the tables' realized run values reproduce delta_run_exp? ---------
     has_delta_run_exp  = output_df["delta_run_exp"].notna()

@@ -19,8 +19,8 @@ Views (parquet)
     archetype_lexicon   — data/archetype_lexicon.parquet           (   3 rows,   8 cols — league-level archetype definitions)
     shape_cards         — data/shape_cards.parquet                 (1592 rows,  18 cols — per-cluster swing ID cards)
     repertoire_scores   — data/repertoire_scores.parquet           ( 703 rows,  15 cols — Repertoire+ and pctile)
-    adjustability       — data/adjustability.parquet               ( 471 rows,   9 cols — adj_count, adj_pitch, adj_gamestate)
-    xrv_swings          — data/xrv_swings.parquet                  (796k rows,  13 cols — per-swing xRV grades)
+    adjustability       — data/adjustability.parquet               ( 471 rows,  17 cols — adj_count, adj_pitch, adj_gamestate, twostrike_rv_penalty, swing_plus[xrv_grade_neutral])
+    xrv_swings          — data/xrv_swings.parquet                  (796k rows,  15 cols — xrv_grade (count-inclusive), xrv_grade_neutral (count-stripped))
 
 Views (CSV — xRV building blocks)
 ----------------------------------
