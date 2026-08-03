@@ -42,9 +42,11 @@ python src/interpret.py      # Layer-1 archetype lexicon -> shape_archetypes + a
 python src/cards.py          # Layer-2 swing ID cards -> shape_cards.parquet + shape_cards_catalog.md
 python src/repertoire.py     # Repertoire+ -> repertoire_scores.parquet + repertoire_catalog.md
 python src/adjustability.py  # adjustability -> adjustability.parquet (headline column: adjustability)
+python src/adjustability_value.py  # matched penalties + OLS -> adjustability.parquet (updated) + adjustability_value.md
+python src/optimal_policy.py  # annualized situational runs -> optimal_policy.parquet
 ```
 
-Order: extract → features → cluster → xrv (built). `interpret.py` and `cards.py` are the interpretability overlay consuming cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py` and `adjustability.py` are the two built Facet-2 stages; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; no test suite or build step yet.
+Order: extract → features → cluster → xrv (built). `interpret.py` and `cards.py` are the interpretability overlay consuming cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py`, `adjustability.py`, `adjustability_value.py`, and `optimal_policy.py` are the built Facet-2 stages; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; no test suite or build step yet.
 
 ### R leaderboards
 
