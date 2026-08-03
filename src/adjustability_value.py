@@ -1,5 +1,13 @@
-"""Adjustability value — matched two-strike penalty + between-batter OLS.
+"""Adjustability value — multi-axis matched penalties + between-batter OLS.
 
+Three situational penalties (each vs empty-base reference within matched cells):
+  twostrike_rv_penalty : 2-strike vs 0-1 strike          within (pitch_type × zone)
+  risp_0out_rv_penalty : RISP+0-outs vs empty             within (pitch_type × zone × strikes)
+  dp_rv_penalty        : 1B-only + <2-outs vs empty       within (pitch_type × zone × strikes)
+  platoon_rv_penalty   : same-hand vs opp-hand matchup    within (pitch_type × zone × strikes)
+
+Each penalty is then regressed on its corresponding adjustment axis (+ swing_plus and
+repertoire_pctile as controls) in a between-batter OLS with clustered SE.
 
 Output: data/adjustability.parquet (updated), results/adjustability_value.md
 Run   : python src/adjustability_value.py
@@ -86,6 +94,138 @@ def compute_matched_penalties() -> pd.DataFrame:
     return result
 
 
+def compute_gamestate_penalties() -> pd.DataFrame:
+    """
+    Two game-state penalties (both vs empty bases), within (pitch_type × zone × strikes):
+
+    risp_0out : RISP (2B or 3B occupied) with 0 outs vs empty bases
+    dp_avoid  : runner on 1B only with <2 outs vs empty bases (double-play situation)
+
+    Including strikes as a matching dimension holds count fixed so game-state differences
+    aren't confounded by the pitch mix that comes with two-strike counts.
+    """
+    con = db.connect("swings")
+    result = con.sql(f"""
+    WITH base AS (
+        SELECT batter_id, batter_stand,
+               (on_2b_id IS NOT NULL OR on_3b_id IS NOT NULL) AND outs_when_up = 0 AS risp_0out,
+               on_1b_id IS NOT NULL AND on_2b_id IS NULL AND on_3b_id IS NULL
+                   AND outs_when_up < 2                                              AS dp_avoid,
+               on_1b_id IS NULL AND on_2b_id IS NULL AND on_3b_id IS NULL            AS empty,
+               delta_run_exp,
+               is_whiff::DOUBLE AS is_whiff,
+               pitch_type || '|' || plate_zone::VARCHAR || '|' || strikes::VARCHAR  AS match_key
+        FROM swings
+        WHERE game_year IN {SEASONS_SQL}
+          AND delta_run_exp IS NOT NULL
+    ),
+    unit_n AS (
+        SELECT batter_id, batter_stand FROM base
+        GROUP BY batter_id, batter_stand HAVING COUNT(*) >= {MIN_SWINGS}
+    ),
+    risp_cells AS (
+        SELECT b.batter_id, b.batter_stand, b.match_key,
+               AVG(delta_run_exp) FILTER (WHERE risp_0out) AS mu_rv_risp,
+               AVG(delta_run_exp) FILTER (WHERE empty)     AS mu_rv_empty,
+               AVG(is_whiff)      FILTER (WHERE risp_0out) AS mu_wh_risp,
+               AVG(is_whiff)      FILTER (WHERE empty)     AS mu_wh_empty,
+               COUNT(*)           FILTER (WHERE risp_0out) AS n_risp,
+               COUNT(*)           FILTER (WHERE empty)     AS n_empty
+        FROM base b INNER JOIN unit_n u USING (batter_id, batter_stand)
+        GROUP BY b.batter_id, b.batter_stand, b.match_key
+        HAVING COUNT(*) FILTER (WHERE risp_0out) >= 3
+           AND COUNT(*) FILTER (WHERE empty)     >= 3
+    ),
+    risp_agg AS (
+        SELECT batter_id, batter_stand,
+               SUM(n_risp::DOUBLE * (mu_rv_risp - mu_rv_empty)) / SUM(n_risp) AS risp_0out_rv_penalty,
+               SUM(n_risp::DOUBLE * (mu_wh_risp - mu_wh_empty)) / SUM(n_risp) AS risp_0out_whiff_penalty,
+               SUM(n_risp)::INTEGER AS risp_0out_n,
+               COUNT(*)::INTEGER    AS risp_0out_cells
+        FROM risp_cells GROUP BY batter_id, batter_stand
+    ),
+    dp_cells AS (
+        SELECT b.batter_id, b.batter_stand, b.match_key,
+               AVG(delta_run_exp) FILTER (WHERE dp_avoid) AS mu_rv_dp,
+               AVG(delta_run_exp) FILTER (WHERE empty)    AS mu_rv_empty,
+               AVG(is_whiff)      FILTER (WHERE dp_avoid) AS mu_wh_dp,
+               AVG(is_whiff)      FILTER (WHERE empty)    AS mu_wh_empty,
+               COUNT(*)           FILTER (WHERE dp_avoid) AS n_dp,
+               COUNT(*)           FILTER (WHERE empty)    AS n_empty
+        FROM base b INNER JOIN unit_n u USING (batter_id, batter_stand)
+        GROUP BY b.batter_id, b.batter_stand, b.match_key
+        HAVING COUNT(*) FILTER (WHERE dp_avoid) >= 3
+           AND COUNT(*) FILTER (WHERE empty)    >= 3
+    ),
+    dp_agg AS (
+        SELECT batter_id, batter_stand,
+               SUM(n_dp::DOUBLE * (mu_rv_dp - mu_rv_empty)) / SUM(n_dp) AS dp_rv_penalty,
+               SUM(n_dp::DOUBLE * (mu_wh_dp - mu_wh_empty)) / SUM(n_dp) AS dp_whiff_penalty,
+               SUM(n_dp)::INTEGER AS dp_n,
+               COUNT(*)::INTEGER  AS dp_cells
+        FROM dp_cells GROUP BY batter_id, batter_stand
+    )
+    SELECT COALESCE(r.batter_id, d.batter_id)       AS batter_id,
+           COALESCE(r.batter_stand, d.batter_stand) AS batter_stand,
+           r.risp_0out_rv_penalty, r.risp_0out_whiff_penalty, r.risp_0out_n, r.risp_0out_cells,
+           d.dp_rv_penalty, d.dp_whiff_penalty, d.dp_n, d.dp_cells
+    FROM risp_agg r
+    FULL OUTER JOIN dp_agg d USING (batter_id, batter_stand)
+    """).df()
+    con.close()
+    return result
+
+
+def compute_platoon_penalty() -> pd.DataFrame:
+    """
+    Arm-side (same-hand) penalty: same-hand matchups vs opposite-hand matchups,
+    within (pitch_type × zone × strikes). Positive = hitter loses more run value
+    against same-hand pitchers (normal platoon disadvantage).
+
+    Strikes in the matching key holds count fixed so arm-side effects aren't
+    confounded by the pitch mix pitchers throw in two-strike counts.
+    """
+    con = db.connect("swings")
+    result = con.sql(f"""
+    WITH base AS (
+        SELECT batter_id, batter_stand,
+               (batter_stand = pitcher_throws)::INT AS same_hand,
+               delta_run_exp,
+               is_whiff::DOUBLE AS is_whiff,
+               pitch_type || '|' || plate_zone::VARCHAR || '|' || strikes::VARCHAR AS match_key
+        FROM swings
+        WHERE game_year IN {SEASONS_SQL}
+          AND delta_run_exp IS NOT NULL
+          AND pitcher_throws IS NOT NULL
+    ),
+    unit_n AS (
+        SELECT batter_id, batter_stand FROM base
+        GROUP BY batter_id, batter_stand HAVING COUNT(*) >= {MIN_SWINGS}
+    ),
+    cell AS (
+        SELECT b.batter_id, b.batter_stand, b.match_key,
+               AVG(delta_run_exp) FILTER (WHERE same_hand = 1) AS mu_rv_same,
+               AVG(delta_run_exp) FILTER (WHERE same_hand = 0) AS mu_rv_opp,
+               AVG(is_whiff)      FILTER (WHERE same_hand = 1) AS mu_wh_same,
+               AVG(is_whiff)      FILTER (WHERE same_hand = 0) AS mu_wh_opp,
+               COUNT(*)           FILTER (WHERE same_hand = 1) AS n_same,
+               COUNT(*)           FILTER (WHERE same_hand = 0) AS n_opp
+        FROM base b INNER JOIN unit_n u USING (batter_id, batter_stand)
+        GROUP BY b.batter_id, b.batter_stand, b.match_key
+        HAVING COUNT(*) FILTER (WHERE same_hand = 1) >= 3
+           AND COUNT(*) FILTER (WHERE same_hand = 0) >= 3
+    )
+    SELECT batter_id, batter_stand,
+           SUM(n_same::DOUBLE * (mu_rv_same - mu_rv_opp)) / SUM(n_same) AS platoon_rv_penalty,
+           SUM(n_same::DOUBLE * (mu_wh_same - mu_wh_opp)) / SUM(n_same) AS platoon_whiff_penalty,
+           SUM(n_same)::INTEGER AS platoon_n,
+           COUNT(*)::INTEGER    AS platoon_cells
+    FROM cell GROUP BY batter_id, batter_stand
+    """).df()
+    con.close()
+    return result
+
+
 def compute_swing_plus() -> pd.DataFrame:
     """Per-batter mean xrv_grade_neutral over all 2024-25 swings.
 
@@ -138,62 +278,78 @@ def _ols_clustered(y: np.ndarray, X: np.ndarray,
     return coefs, se, t_stats, p_vals, n, B
 
 
+_AXIS_PENALTIES = [
+    # (penalty_col, primary_treat_col, scope_label, primary_treat_label)
+    ("twostrike_rv_penalty",  "adj_count",     "Two-strike",           "adj_count"),
+    ("risp_0out_rv_penalty",  "adj_gamestate", "RISP + 0-out",         "adj_gamestate"),
+    ("dp_rv_penalty",         "adj_gamestate", "DP avoidance (1B+<2)", "adj_gamestate"),
+    ("platoon_rv_penalty",    "adj_platoon",   "Arm-side (same-hand)", "adj_platoon"),
+]
+
+
 def run_ols(adj: pd.DataFrame) -> list:
     """
-    Between-batter OLS:
-        twostrike_rv_penalty ~ adj_count + swing_plus + repertoire_pctile
+    Between-batter OLS for each situational penalty against its axis + controls.
 
-    Also tests adj_composite and adj_pitch as alternative treatments.
-    All variables standardised to z-scores. Clustered SE by batter_id.
-    Returns a list of markdown lines.
+    For each penalty in _AXIS_PENALTIES, fits:
+        penalty_z ~ treat_z + swing_plus_z + repertoire_pctile_z
+
+    Primary treatment is the axis-specific column; composite adjustability is also
+    tested as a secondary row. adj_pitch is excluded from the headline (reactive axis —
+    hitters cannot choose pitch type before the pitch is thrown).
+
+    All variables z-scored. Clustered SE by batter_id. Returns markdown lines.
     """
     rep = pd.read_parquet(DATA / "repertoire_scores.parquet",
                           columns=KEY + ["repertoire_pctile"])
-    df  = (adj.merge(rep, on=KEY, how="inner")
-              .dropna(subset=["twostrike_rv_penalty", "adj_count",
-                               "swing_plus", "repertoire_pctile"]))
-    print(f"  OLS n={len(df)} batters")
+    base = adj.merge(rep, on=KEY, how="inner")
 
     def _z(s): return (s - s.mean()) / s.std()
 
-    y      = _z(df["twostrike_rv_penalty"]).to_numpy(float)
-    sp_z   = _z(df["swing_plus"]).to_numpy(float)
-    rp_z   = _z(df["repertoire_pctile"]).to_numpy(float)
-    groups = df["batter_id"].to_numpy()
-
-    TREATMENTS = [
-        ("adj_count",     "Count adjustability (adj_count)"),
-        ("adjustability", "Composite adjustability"),
-        ("adj_pitch",     "Pitch-type adjustability (adj_pitch)"),
-    ]
     rows = []
-    for treat_col, treat_label in TREATMENTS:
-        t_z = _z(df[treat_col]).to_numpy(float)
-        X   = np.column_stack([np.ones(len(df)), sp_z, rp_z, t_z])
-        coefs, se, t_stats, p_vals, n, B = _ols_clustered(y, X, groups)
-        θ, θ_se, θ_t, θ_p = coefs[-1], se[-1], t_stats[-1], p_vals[-1]
-        rows.append(dict(
-            treatment=treat_label,
-            theta=round(float(θ), 4),
-            se=round(float(θ_se), 4),
-            ci_lo=round(float(θ - 1.96 * θ_se), 4),
-            ci_hi=round(float(θ + 1.96 * θ_se), 4),
-            t=round(float(θ_t), 2),
-            p=round(float(θ_p), 4),
-            n=n, B=B,
-        ))
-        print(f"    {treat_label}: θ={θ:+.4f}  SE={θ_se:.4f}  t={θ_t:.2f}  p={θ_p:.4f}")
+    for penalty_col, primary_treat, scope_label, _ in _AXIS_PENALTIES:
+        df = base.dropna(subset=[penalty_col, primary_treat, "swing_plus", "repertoire_pctile"])
+        if len(df) < 50:
+            print(f"  OLS skipped ({scope_label} / {penalty_col}): only {len(df)} complete rows")
+            continue
+        print(f"  OLS {scope_label} n={len(df)}")
 
-    tab = pd.DataFrame(rows)
+        y      = _z(df[penalty_col]).to_numpy(float)
+        sp_z   = _z(df["swing_plus"]).to_numpy(float)
+        rp_z   = _z(df["repertoire_pctile"]).to_numpy(float)
+        groups = df["batter_id"].to_numpy()
+
+        for treat_col in [primary_treat, "adjustability"]:
+            label = treat_col if treat_col == primary_treat else "composite adjustability"
+            t_z = _z(df[treat_col]).to_numpy(float)
+            X   = np.column_stack([np.ones(len(df)), sp_z, rp_z, t_z])
+            coefs, se, t_stats, p_vals, n, B = _ols_clustered(y, X, groups)
+            θ, θ_se, θ_t, θ_p = coefs[-1], se[-1], t_stats[-1], p_vals[-1]
+            rows.append(dict(
+                scope=scope_label,
+                treatment=label,
+                penalty=penalty_col,
+                theta=round(float(θ), 4),
+                se=round(float(θ_se), 4),
+                ci_lo=round(float(θ - 1.96 * θ_se), 4),
+                ci_hi=round(float(θ + 1.96 * θ_se), 4),
+                t=round(float(θ_t), 2),
+                p=round(float(θ_p), 4),
+                n=n, B=B,
+            ))
+            print(f"    {scope_label} / {label}: θ={θ:+.4f}  SE={θ_se:.4f}  t={θ_t:.2f}  p={θ_p:.4f}")
+
+    tab = pd.DataFrame(rows).drop(columns=["penalty"])
     lines = [
-        "## Between-batter OLS: two-strike run-value penalty\n",
-        (f"N = {len(df)} batters (2024-25, ≥{MIN_SWINGS} swings). "
-         "Outcome: `twostrike_rv_penalty` = per-batter weighted mean of "
-         "(2-strike delta_run_exp − early-count delta_run_exp) within same pitch_type × plate_zone cell. "
-         "All variables standardised (z-scores). Clustered SE by batter_id.\n"),
-        "**Controls:** swing_plus (mean xrv_grade_neutral — count-stripped swing quality), "
-        "repertoire_pctile.\n",
-        "Positive θ = more adjustable batters have *less negative* (or better) 2-strike penalty.\n",
+        "## Between-batter OLS: multi-axis situational penalties\n",
+        (f"N = 471 (batter, stand) units (2024-25, ≥{MIN_SWINGS} swings). "
+         "Each outcome is a per-batter weighted mean of (situation Δ) within matched "
+         "pitch_type × plate_zone cells (+ strikes bucket for game-state and platoon penalties). "
+         "All variables z-scored. Clustered SE by batter_id.\n"),
+        "**Controls:** swing_plus (mean xrv_grade_neutral), repertoire_pctile.\n",
+        "Positive θ = more adjustable batters have a *less negative* (better) penalty.\n",
+        "**Note:** adj_pitch excluded — pitch-type identification is reactive "
+        "(hitters cannot choose arm slot before the pitch is thrown), not a volitional lever.\n",
         tab.to_markdown(index=False),
         "",
     ]
@@ -464,27 +620,36 @@ def run_dml(analysis_df: pd.DataFrame, confounder_cols: list) -> list:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    # ── Section 1: matched penalty ──
-    print("=== Section 1: matched two-strike penalty ===")
-    penalties  = compute_matched_penalties()
-    swing_plus = compute_swing_plus()
-    print(f"  {len(penalties)} units with matched penalty")
+    # ── Section 1: matched penalties ──
+    print("=== Section 1: matched situational penalties ===")
+    two_strike  = compute_matched_penalties()
+    game_state  = compute_gamestate_penalties()
+    platoon     = compute_platoon_penalty()
+    swing_plus  = compute_swing_plus()
+    print(f"  two-strike: {len(two_strike)} units")
+    print(f"  game-state: {len(game_state)} units (risp_0out), {game_state['dp_n'].notna().sum()} units (dp)")
+    print(f"  platoon:    {len(platoon)} units")
 
     adj = pd.read_parquet(DATA / "adjustability.parquet")
-    stale = ["twostrike_xrv_penalty", "twostrike_rv_penalty", "twostrike_whiff_penalty",
-             "matched_n_2k", "matched_cells", "swing_plus"]
+    stale = [
+        "twostrike_xrv_penalty", "twostrike_rv_penalty", "twostrike_whiff_penalty",
+        "matched_n_2k", "matched_cells",
+        "risp_0out_rv_penalty", "risp_0out_whiff_penalty", "risp_0out_n", "risp_0out_cells",
+        "dp_rv_penalty", "dp_whiff_penalty", "dp_n", "dp_cells",
+        "platoon_rv_penalty", "platoon_whiff_penalty", "platoon_n", "platoon_cells",
+        "swing_plus",
+    ]
     adj = adj.drop(columns=[c for c in stale if c in adj.columns])
-
-    adj = adj.merge(penalties, on=KEY, how="left").merge(swing_plus, on=KEY, how="left")
+    adj = (adj
+           .merge(two_strike, on=KEY, how="left")
+           .merge(game_state,  on=KEY, how="left")
+           .merge(platoon,     on=KEY, how="left")
+           .merge(swing_plus,  on=KEY, how="left"))
     adj.to_parquet(DATA / "adjustability.parquet", index=False)
 
-    n_matched = int(adj["twostrike_rv_penalty"].notna().sum())
-    print(f"  Updated adjustability.parquet  ({n_matched} units with matched penalty)")
-    p = adj.dropna(subset=["twostrike_rv_penalty"])
-    print(f"  twostrike_rv_penalty    mean {p.twostrike_rv_penalty.mean():.4f}  "
-          f"median {p.twostrike_rv_penalty.median():.4f}")
-    print(f"  twostrike_whiff_penalty mean {p.twostrike_whiff_penalty.mean():.3f}  "
-          f"median {p.twostrike_whiff_penalty.median():.3f}")
+    for col in ["twostrike_rv_penalty", "risp_0out_rv_penalty", "dp_rv_penalty", "platoon_rv_penalty"]:
+        sub = adj.dropna(subset=[col])
+        print(f"  {col}: n={len(sub)}  mean={sub[col].mean():.4f}  median={sub[col].median():.4f}")
 
     # ── Section 2: between-batter OLS ──
     print("\n=== Section 2: between-batter OLS ===")
