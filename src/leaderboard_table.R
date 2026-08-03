@@ -316,57 +316,56 @@ make_leaderboard(low_adj_high_val |> select(all_of(resid_cols)),
 
 # ── Seasonal Runs leaderboard (unit = batter x stand) ────────────────────────────────────────────
 # Reads data/optimal_policy.parquet (written by src/optimal_policy.py).
-# Annualizes each matched penalty: season_runs_* = rv_penalty × per-season swing exposure.
-# Only 2K axis has significant OLS payoff; GS and platoon shown for context.
-# Platoon column is NA for switch-hitter units (near-zero same-hand exposure within stance).
+# Weighted total: t-stat proportional weights from OLS (2K 67.7% / GS 28.3% / platoon 4.1%).
+# Per-axis raw runs shown as context. Platoon column NA for switch-hitter units.
 
 pol_raw <- read_parquet("data/optimal_policy.parquet",
                         col_select = c("batter_id", "batter_stand", "label",
-                                       "season_runs_total", "season_runs_2k",
+                                       "season_runs_weighted", "season_runs_2k",
                                        "season_runs_gamestate", "season_runs_platoon",
                                        "adjustability_plus", "swing_plus")) |>
-  filter(!is.na(season_runs_total)) |>
+  filter(!is.na(season_runs_weighted)) |>
   mutate(
-    TotalRuns   = round(season_runs_total, 1),
+    WtdRuns     = round(season_runs_weighted, 1),
     Runs2K      = round(season_runs_2k, 1),
     RunsGS      = round(season_runs_gamestate, 1),
     RunsPlatoon = round(season_runs_platoon, 1),
     AdjPlus     = round(adjustability_plus, 1),
     SwingPlus   = round(swing_plus, 1)
   ) |>
-  arrange(desc(TotalRuns)) |>
+  arrange(desc(WtdRuns)) |>
   mutate(Rank = row_number())
 
 n_pol       <- nrow(pol_raw)
-pal_pol     <- col_numeric(PAL_COLS, domain = range(pol_raw$TotalRuns, na.rm = TRUE))
+pal_pol     <- col_numeric(PAL_COLS, domain = range(pol_raw$WtdRuns, na.rm = TRUE))
 
 pol_cols   <- c("Rank", "batter_id", "label", "batter_stand",
-                "TotalRuns", "Runs2K", "RunsGS", "RunsPlatoon", "AdjPlus", "SwingPlus")
+                "WtdRuns", "Runs2K", "RunsGS", "RunsPlatoon", "AdjPlus", "SwingPlus")
 pol_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
-                   TotalRuns = "Total Runs", Runs2K = "2K Runs",
+                   WtdRuns = "Wtd Runs", Runs2K = "2K Runs",
                    RunsGS = "GS Runs", RunsPlatoon = "Platoon Runs",
                    AdjPlus = "Adj+", SwingPlus = "Swing+")
-pol_align  <- c("Rank", "batter_stand", "TotalRuns", "Runs2K", "RunsGS", "RunsPlatoon",
+pol_align  <- c("Rank", "batter_stand", "WtdRuns", "Runs2K", "RunsGS", "RunsPlatoon",
                 "AdjPlus", "SwingPlus")
 pol_foot   <- paste0(
   "n=", n_pol, " qualified units (≥400 swings, 2024-25). ",
-  "Run values = delta_run_exp × annual swing exposure (2024-25 per-season avg). ",
-  "Only 2K axis has significant OLS payoff (p=0.0003); GS and platoon shown for context. ",
+  "Wtd Runs = OLS t-stat weighted sum (2K 67.7% / GS 28.3% / platoon 4.1%). ",
+  "Per-axis runs = delta_run_exp × annual swing exposure; raw values shown for context. ",
   "Platoon runs shown as '-' for switch-hitter units (near-zero same-hand exposure within stance).")
 
 top_pol <- pol_raw |> head(TOP_N)
-bot_pol <- pol_raw |> tail(TOP_N) |> arrange(TotalRuns) |> mutate(Rank = row_number())
+bot_pol <- pol_raw |> tail(TOP_N) |> arrange(WtdRuns) |> mutate(Rank = row_number())
 
 make_leaderboard(top_pol |> select(all_of(pol_cols)),
-                 "TotalRuns", pal_pol, pol_labels, pol_align,
+                 "WtdRuns", pal_pol, pol_labels, pol_align,
                  "**Seasonal Situational Runs — Leaders**",
-                 sprintf("Most runs gained from situational performance  &middot;  n=%d  &middot;  color = Total Runs", n_pol),
+                 sprintf("Evidence-weighted runs from situational performance  &middot;  n=%d  &middot;  color = Wtd Runs", n_pol),
                  fig_path("adj_policy_top_gt.png"), footnote = pol_foot, width = 1050)
 
 make_leaderboard(bot_pol |> select(all_of(pol_cols)),
-                 "TotalRuns", pal_pol, pol_labels, pol_align,
+                 "WtdRuns", pal_pol, pol_labels, pol_align,
                  "**Seasonal Situational Runs — Worst Performers**",
-                 sprintf("Most runs lost from situational performance  &middot;  same pool (n=%d)  &middot;  color = Total Runs", n_pol),
+                 sprintf("Most evidence-weighted runs lost  &middot;  same pool (n=%d)  &middot;  color = Wtd Runs", n_pol),
                  fig_path("adj_policy_bottom_gt.png"), footnote = pol_foot, width = 1050)
 
 cat("done\n")

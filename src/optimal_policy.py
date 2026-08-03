@@ -17,6 +17,16 @@ DATA = ROOT / "data"
 SEASONS = [2024, 2025]
 N_SEASONS = len(SEASONS)
 
+# T-stat proportional weights from between-batter OLS (adjustability_value.md).
+# Weights encode both effect size and precision: t = θ/SE, so noisy estimates are
+# down-weighted relative to their raw coefficient. Switch-hitter units have null
+# platoon_rv_penalty; their W_PL term contributes 0 (fillna(0) below).
+_T = dict(two_k=3.64, gs=1.52, pl=0.22)
+_T_SUM = sum(_T.values())
+W_2K = _T["two_k"] / _T_SUM   # ≈ 0.677
+W_GS = _T["gs"]    / _T_SUM   # ≈ 0.283
+W_PL = _T["pl"]    / _T_SUM   # ≈ 0.041
+
 
 def compute_exposure(sw: pd.DataFrame) -> pd.DataFrame:
     """Per-(batter, stand) annual swing counts for each situation axis."""
@@ -69,7 +79,7 @@ def main():
         DATA / "adjustability.parquet",
         columns=[
             "batter_id", "batter_stand", "label", "n_swings",
-            "adj_count", "adjustability_plus", "adjustability_pctile", "swing_plus",
+            "adjustability", "adj_count", "adjustability_plus", "adjustability_pctile", "swing_plus",
             "twostrike_rv_penalty", "gamestate_rv_penalty", "platoon_rv_penalty",
         ],
     )
@@ -100,9 +110,15 @@ def main():
     df["season_runs_gamestate"] = df["gamestate_rv_penalty"] * df["n_gamestate_per_season"]
     # Switch-hitter units have null platoon_rv_penalty — propagate NaN
     df["season_runs_platoon"] = df["platoon_rv_penalty"] * df["n_platoon_per_season"]
-    # Total sums non-null axes; switch hitters get 2K + GS only
+    # Unweighted total: sums non-null axes (switch hitters get 2K + GS only)
     df["season_runs_total"] = df[["season_runs_2k", "season_runs_gamestate", "season_runs_platoon"]].sum(
         axis=1, min_count=1
+    )
+    # Evidence-weighted total: t-stat proportional weights from OLS; platoon NaN → 0
+    df["season_runs_weighted"] = (
+        W_2K * df["season_runs_2k"]
+        + W_GS * df["season_runs_gamestate"]
+        + W_PL * df["season_runs_platoon"].fillna(0)
     )
 
     print("Joining archetype and repertoire...")
@@ -112,10 +128,11 @@ def main():
 
     out_cols = [
         "batter_id", "batter_stand", "label", "n_swings",
-        "adj_count", "adjustability_plus", "adjustability_pctile", "swing_plus",
+        "adjustability", "adj_count", "adjustability_plus", "adjustability_pctile", "swing_plus",
         "twostrike_rv_penalty", "gamestate_rv_penalty", "platoon_rv_penalty",
         "n_2k_per_season", "n_gamestate_per_season", "n_platoon_per_season",
-        "season_runs_2k", "season_runs_gamestate", "season_runs_platoon", "season_runs_total",
+        "season_runs_2k", "season_runs_gamestate", "season_runs_platoon",
+        "season_runs_total", "season_runs_weighted",
         "archetype_name", "primary_grade",
         "repertoire_pctile", "effective_shapes",
     ]
