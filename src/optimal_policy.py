@@ -17,11 +17,7 @@ DATA = ROOT / "data"
 SEASONS = [2024, 2025]
 N_SEASONS = len(SEASONS)
 
-# T-stat proportional weights from the Section 2b penalty OLS (adjustability_value.md).
-# Section 2b — not the Section 2 wOBA headline — because season_runs_* are run-value
-# quantities, so the matching evidence is the per-axis run-value regression. The wOBA
-# t-stats also cannot serve here: two of the three are negative, and clipping them would
-# zero out the null axes rather than down-weight them.
+# T-stat proportional weights from between-batter OLS (adjustability_value.md).
 # Weights encode both effect size and precision: t = θ/SE, so noisy estimates are
 # down-weighted relative to their raw coefficient. Switch-hitter units have null
 # platoon_rv_penalty; their W_PL term contributes 0 (fillna(0) below).
