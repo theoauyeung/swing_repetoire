@@ -42,18 +42,18 @@ python src/interpret.py      # Layer-1 archetype lexicon -> shape_archetypes + a
 python src/cards.py          # Layer-2 swing ID cards -> shape_cards.parquet + shape_cards_catalog.md
 python src/repertoire.py     # Repertoire+ -> repertoire_scores.parquet + repertoire_catalog.md
 python src/adjustability.py  # adjustability -> adjustability.parquet (headline column: adjustability)
-python src/adjustability_value.py  # matched penalties + OLS -> adjustability.parquet (updated) + adjustability_value.md
-python src/optimal_policy.py  # counterfactual adjustment value -> optimal_policy.parquet (~25 min)
-python src/optimal_policy_validate.py  # validation -> results/optimal_policy.md
+python src/adjustability_value_first_draft.py  # matched penalties + OLS -> adjustability.parquet (updated) + adjustability_value_first_draft.md
+python src/adjustability_value.py  # counterfactual adjustment value -> adjustability_value.parquet (~25 min)
+python src/adjustability_value_validate.py  # validation -> results/adjustability_value.md
 ```
 
-Order: extract → features → cluster → xrv (built). `interpret.py` and `cards.py` are the interpretability overlay consuming cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py`, `adjustability.py`, `adjustability_value.py`, and `optimal_policy.py` are the built Facet-2 stages; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; no test suite or build step yet.
+Order: extract → features → cluster → xrv (built). `interpret.py` and `cards.py` are the interpretability overlay consuming cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py`, `adjustability.py`, `adjustability_value_first_draft.py`, and `adjustability_value.py` are the built Facet-2 stages; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; no test suite or build step yet.
 
 ### R leaderboards
 
 `src/leaderboard_table.R` writes presentation-grade Swing+ / Repertoire+ / Adjustability leaderboard PNGs using R (gt + mlbplotR). `batter_id` is the MLBAM id `gt_fmt_mlb_headshot()` keys on. Run `Rscript src/leaderboard_table.R` from repo root; it reads `data/*.parquet` and writes `results/plots/{swingplus,repertoire,adjustability}_leaderboard_gt.png` (+ `*_bottom_gt.png`).
 
-`swing+_results.ipynb` displays the Swing+/Repertoire+ PNGs. `adjustability_results.ipynb` opens with a 2-panel location-confound defense figure (`adjustability_location_confound.png`: (A) mean swing tilt across the zone shows location sets the swing; (B) 2-strike-minus-early pitch density shows location shifts with the count), then displays the adjustability leaderboard and the multi-axis OLS payoff chart (`adjustability_payoff_coeffs.png`: three situational penalties — two-strike, any-runner game-state, arm-side platoon — each regressed on its corresponding axis, parsed from `results/adjustability_value.md`; only `adj_count` is significant, game-state and platoon null).
+`swing+_results.ipynb` displays the Swing+/Repertoire+ PNGs. `adjustability_results.ipynb` opens with a 2-panel location-confound defense figure (`adjustability_location_confound.png`: (A) mean swing tilt across the zone shows location sets the swing; (B) 2-strike-minus-early pitch density shows location shifts with the count), then displays the adjustability leaderboard and the multi-axis OLS payoff chart (`adjustability_payoff_coeffs.png`: three situational penalties — two-strike, any-runner game-state, arm-side platoon — each regressed on its corresponding axis, parsed from `results/adjustability_value_first_draft.md`; only `adj_count` is significant, game-state and platoon null).
 
 R 4.6.0 lives at `/usr/local/bin/Rscript` (on PATH on macOS); packages arrow/dplyr/gt/gtExtras/mlbplotR/scales/webshot2 are installed. `gtsave()` PNG export needs headless Chrome (webshot2), which works in this env.
 
@@ -75,9 +75,9 @@ Method (v4): one joint regression per hitter per dial, `dial ~ location surface 
 
 Why v4 is better: v3's global surface let pitch-movement-correlated-with-location leak into `adj_pitch`; per-hitter location control removed it (adj_pitch mean 0.058→0.030), so the headline is now count-led (corr with `adj_count` 0.72 > `adj_pitch` 0.57), pointing at the axis that actually pays off. Per-axis means: count 0.021, pitch 0.030, gamestate 0.002. `adj_count` is rank-stable across v3→v4 (r=0.94); `adj_pitch` moved most (r=0.75). YoY reliability (v4, recomputed 2026-07-23): `adjustability` r=0.67, `adj_count` r=0.69, `adj_pitch` r=0.64 — all repeatable; `adj_gamestate` r=0.28 is noise (v3 read 0.75/0.72/0.78/0.19, same conclusion). The v4 recompute lives in `adjustability_results.ipynb`. v2's directional construction is in git history (988a0f1). See research-design.md Part D + docs/adjustability-decontamination.md.
 
-### Adjustability value
+### Adjustability value (first draft — matched penalties)
 
-`src/adjustability_value.py` updates `data/adjustability.parquet` and writes `results/adjustability_value.md`. Three sections:
+`src/adjustability_value_first_draft.py` updates `data/adjustability.parquet` and writes `results/adjustability_value_first_draft.md`. This is the FIRST DRAFT of adjustability value — superseded as the headline by the counterfactual build below, but still a live upstream: it produces the penalty columns and `swing_plus` that the counterfactual's validation consumes. Three sections:
 
 **Section 1 — Multi-axis matched penalties** (output columns added to `adjustability.parquet`):
 Three situational penalties, all using realized `delta_run_exp` (not `xrv_grade`):
@@ -88,11 +88,11 @@ Also adds `swing_plus` (mean `xrv_grade_neutral`). All penalties use `delta_run_
 
 **Section 2 — Between-batter OLS** (primary): each penalty regressed on its corresponding axis (+ `swing_plus` + `repertoire_pctile`), all z-scored, clustered SE by batter_id. `adj_pitch` excluded — pitch type is reactive, not a pre-pitch volitional lever. **Key findings (2026-08-03):** only count axis has a significant payoff: `adj_count` θ=+0.145 (SE=0.040, t=3.64, p=0.0003) on `twostrike_rv_penalty`. Game-state (any runner, p=0.13) and platoon (p=0.83) are null — mechanical adjustment is real but doesn't translate to detectable run-value benefits in these matched tests.
 
-**Section 3 — Swing-level DML** (fallback, kept for robustness): Robinson (1988) partial linear model with within-batter FE, XGBoost nuisance models, GroupKFold on batter_id. Known limitation: per-axis treatments (T_count, T_pitch) share variables with the confounder set, which may inflate r2_T and compress θ. Run `python src/adjustability_value.py` to append DML results (~30 min).
+**Section 3 — Swing-level DML** (fallback, kept for robustness): Robinson (1988) partial linear model with within-batter FE, XGBoost nuisance models, GroupKFold on batter_id. Known limitation: per-axis treatments (T_count, T_pitch) share variables with the confounder set, which may inflate r2_T and compress θ. Run `python src/adjustability_value_first_draft.py` to append DML results (~30 min).
 
-### Optimal adjustment policy
+### Adjustability value (counterfactual — headline)
 
-`src/optimal_policy.py` → `data/optimal_policy.parquet`. Counterfactual season-run accounting for situational swing changes. 471 units, 2024-25, ≥400 swings, 573,198 swings. Replaced the old within-situation-contrast design: that estimand was defined only on swings inside the contrasted situations and was scaled by each hitter's easy-count baseline — Judge appeared to "lose 4.5 runs for adjusting" while Arraez "gained 14," an artifact of talent scale.
+`src/adjustability_value.py` → `data/adjustability_value.parquet`. Counterfactual season-run accounting for situational swing changes. 471 units, 2024-25, ≥400 swings, 573,198 swings. Replaced the old within-situation-contrast design: that estimand was defined only on swings inside the contrasted situations and was scaled by each hitter's easy-count baseline — Judge appeared to "lose 4.5 runs for adjusting" while Arraez "gained 14," an artifact of talent scale.
 
 **Estimand.** For every competitive swing: `xRV(your actual swing) − xRV(your de-situated swing on the same pitch)`. Summed over two seasons and divided by 2 to give season runs. Both arms are FITTED values from the same per-unit OLS — execution noise cancels in the difference and only the situation-attributable component survives.
 
@@ -104,11 +104,11 @@ Also adds `swing_plus` (mean `xrv_grade_neutral`). All penalties use `delta_run_
 
 **xRV variant.** `assemble_xrv` (not the neutral variant) — the mechanism under test is whether two-strike compression buys enough contact to pay for the strikeout risk that lives in `rv_whiff`.
 
-**`pitch_type` category cast.** Must be cast to `category` ONCE on the full frame (all 17 league categories) BEFORE per-unit slicing. Otherwise each unit infers its own integer codes and every XGBoost prediction is silently wrong. `python src/optimal_policy.py --verify` scores observed shapes and checks max deviation against the published `xrv_swings.parquet`; it reported max deviation 0.000e+00.
+**`pitch_type` category cast.** Must be cast to `category` ONCE on the full frame (all 17 league categories) BEFORE per-unit slicing. Otherwise each unit infers its own integer codes and every XGBoost prediction is silently wrong. `python src/adjustability_value.py --verify` scores observed shapes and checks max deviation against the published `xrv_swings.parquet`; it reported max deviation 0.000e+00.
 
 **Output columns.** `runs_total` (season runs, all axes), `runs_count`, `runs_gamestate`, `runs_platoon`, `runs_interaction` (the cross-term, computed as `runs_total` minus the three single-axis terms, so it closes the identity by construction — the 2.8e-14 check confirms the float arithmetic, not that the axes are separable), `runs_total_2k` (two-strike swings only), `runs_per_swing`, `alpha_star_supported`, `alpha_at_boundary`, `marginal_runs_per_alpha`. Replaced all old `season_runs_*` / `adj_runs_*` / `beta_*` columns.
 
-**Key findings (2026-08-03).** `runs_total` mean +1.583, sd 1.405, range [−1.675, +7.315]; 31 of 471 units negative. Axis means: count +1.547, gamestate −0.032, platoon +0.054, interaction +0.014 — count dominates. The interaction figure is a SIGNED mean and cancels; on magnitude mean `|runs_interaction|` = 0.193, median 12% of a unit's own `|runs_total|`, 33% of units above 20%, max 1.232. Read the axis split as additive at the league level only — per unit it carries a real cross-term. **The two-strike contribution is zero: `runs_count` mean +1.547 but `runs_total_2k` mean −0.028.** All count-axis value accrues on non-two-strike swings. This qualifies the `adjustability_value.py` finding: `adj_count` θ=+0.145 (p=0.0003) on `twostrike_rv_penalty` is a two-strike result measured via matched between-batter damage limitation, while `runs_count` is per-swing value accumulation across the whole count distribution. They are different estimands and do not contradict; but the motivating "two-strike adjustability" story should now be stated more narrowly — the payoff is limiting two-strike run-value damage, not accumulating season runs at two strikes.
+**Key findings (2026-08-03).** `runs_total` mean +1.583, sd 1.405, range [−1.675, +7.315]; 31 of 471 units negative. Axis means: count +1.547, gamestate −0.032, platoon +0.054, interaction +0.014 — count dominates. The interaction figure is a SIGNED mean and cancels; on magnitude mean `|runs_interaction|` = 0.193, median 12% of a unit's own `|runs_total|`, 33% of units above 20%, max 1.232. Read the axis split as additive at the league level only — per unit it carries a real cross-term. **The two-strike contribution is zero: `runs_count` mean +1.547 but `runs_total_2k` mean −0.028.** All count-axis value accrues on non-two-strike swings. This qualifies the `adjustability_value_first_draft.py` finding: `adj_count` θ=+0.145 (p=0.0003) on `twostrike_rv_penalty` is a two-strike result measured via matched between-batter damage limitation, while `runs_count` is per-swing value accumulation across the whole count distribution. They are different estimands and do not contradict; but the motivating "two-strike adjustability" story should now be stated more narrowly — the payoff is limiting two-strike run-value damage, not accumulating season runs at two strikes.
 
 **`runs_total` is a counting stat.** `corr(runs_count, n_swings) = +0.621`. The rate column `runs_per_swing` is nearly orthogonal to volume (r=+0.096) and tracks mechanical adjustability better: `corr(runs_per_swing, adj_count) = +0.446` vs +0.298 for `runs_count`. Do not read the runs leaderboard as a skill ranking without adjusting for playing time.
 

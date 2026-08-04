@@ -6,7 +6,7 @@ realized delta_run_exp. That makes validation load-bearing rather than a formali
 Pre-committed failure condition: if the predictive test is null AND the placebo does not
 collapse, runs_total is a model artifact and no leaderboard ships from it.
 
-Run: python src/optimal_policy_validate.py
+Run: python src/adjustability_value_validate.py
 """
 import sys
 from pathlib import Path
@@ -19,7 +19,7 @@ DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from adjustability import KEY, SEASONS                    # noqa: E402
-from adjustability_value import _ols_clustered            # noqa: E402
+from adjustability_value_first_draft import _ols_clustered            # noqa: E402
 
 
 def season_outcomes():
@@ -81,7 +81,7 @@ def reliability(min_season_swings=MIN_SEASON_SWINGS):
     unit_record divides by N_SEASONS, which is a constant factor here and therefore
     leaves the correlation unchanged; no rescaling is needed.
     """
-    import optimal_policy as op
+    import adjustability_value as op
 
     models = op.load_models()
     run_value_tables = op.xrv.load_run_value_tables()
@@ -105,7 +105,7 @@ def reliability(min_season_swings=MIN_SEASON_SWINGS):
 
 def placebo(n_units=60, seed=11):
     """Recompute runs_total on within-unit shuffled situation labels."""
-    import optimal_policy as op
+    import adjustability_value as op
 
     models = op.load_models()
     run_value_tables = op.xrv.load_run_value_tables()
@@ -122,7 +122,7 @@ def placebo(n_units=60, seed=11):
 
 
 def main():
-    df = pd.read_parquet(DATA / "optimal_policy.parquet").merge(
+    df = pd.read_parquet(DATA / "adjustability_value.parquet").merge(
         season_outcomes(), on=KEY, how="left")
 
     conv, pred = convergent(df), predictive(df)
@@ -215,7 +215,7 @@ def main():
         "## Verdict\n",
         verdict,
     ]
-    out = ROOT / "results" / "optimal_policy.md"
+    out = ROOT / "results" / "adjustability_value.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     print(f"\nWrote {out}")
 
