@@ -103,6 +103,24 @@ def reliability(min_season_swings=MIN_SEASON_SWINGS):
     return pd.DataFrame(rows)
 
 
+def placebo(n_units=60, seed=11):
+    """Recompute runs_total on within-unit shuffled situation labels."""
+    import optimal_policy as op
+
+    models = op.load_models()
+    run_value_tables = op.xrv.load_run_value_tables()
+    swings = op.load_swings()
+    groups = list(swings.groupby(KEY, observed=True, sort=False))[:n_units]
+
+    real, fake = [], []
+    for i, (_, group) in enumerate(groups):
+        group = group.reset_index(drop=True)
+        real.append(op.unit_record(models, run_value_tables, group)["runs_total"])
+        fake.append(op.unit_record(models, run_value_tables, group,
+                                   shuffle_seed=seed + i)["runs_total"])
+    return pd.DataFrame({"real": real, "placebo": fake})
+
+
 def main():
     df = pd.read_parquet(DATA / "optimal_policy.parquet").merge(
         season_outcomes(), on=KEY, how="left")
@@ -118,7 +136,14 @@ def main():
     print(f"  n = {len(rel)} units with >= {MIN_SEASON_SWINGS} swings in both seasons, "
           f"r = {split_r:.3f}")
 
+    print("\nRunning placebo (60 units, ~6 min)...")
+    plac = placebo()
+    plac_ratio = float(plac["placebo"].abs().mean() / plac["real"].abs().mean())
+    print(f"  mean |real| = {plac['real'].abs().mean():.2f}  "
+          f"mean |placebo| = {plac['placebo'].abs().mean():.2f}  ratio = {plac_ratio:.2f}")
+
     predictive_null = bool((pred["p"] > 0.05).all())
+    placebo_failed = plac_ratio > 0.3
     lines = [
         "# Counterfactual adjustment value — validation\n",
         (f"2024-25, {len(df)} units. `runs_total` = season runs from situational swing "
@@ -153,13 +178,22 @@ def main():
         f"- median `alpha_star_supported`: {df['alpha_star_supported'].median():.2f}\n",
         f"- mean `marginal_runs_per_alpha`: {df['marginal_runs_per_alpha'].mean():+.2f} runs\n",
         "",
+        "## Placebo\n",
+        ("Situation labels shuffled within unit, preserving marginals and destroying any "
+         "real situation-shape relationship. 60 units.\n"),
+        (f"- mean |runs_total| real: {plac['real'].abs().mean():.2f}\n"
+         f"- mean |runs_total| placebo: {plac['placebo'].abs().mean():.2f}\n"
+         f"- ratio: {plac_ratio:.2f} (collapse expected — under ~0.3 is a pass)\n"),
+        "",
         "## Verdict\n",
-        ("**Predictive test is null.** Under the pre-committed failure condition this "
-         "accounting is reported as a model-based decomposition, not a validated "
-         "leaderboard — pending the placebo result.\n"
-         if predictive_null else
-         "**Predictive test passes.** The accounting tracks realized production after "
-         "controlling for swing quality.\n"),
+        ("**Model artifact.** The predictive test is null and the placebo did not "
+         "collapse. `runs_total` ships as a decomposition only; no leaderboard.\n"
+         if (predictive_null and placebo_failed) else
+         "**Usable.** " + ("Predictive test null but the placebo collapses, so the "
+                           "machinery is not manufacturing value from noise.\n"
+                           if predictive_null else
+                           "The accounting tracks realized production after controlling "
+                           "for swing quality, and the placebo collapses.\n")),
     ]
     out = ROOT / "results" / "optimal_policy.md"
     out.write_text("\n".join(lines), encoding="utf-8")

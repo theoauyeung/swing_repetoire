@@ -116,13 +116,22 @@ N_SEASONS = len(SEASONS)
 AXIS_NAMES = list(cf.AXES)
 
 
-def unit_record(models, run_value_tables, group, headline_only=False):
+def unit_record(models, run_value_tables, group, headline_only=False, shuffle_seed=None):
     """One unit's counterfactual run accounting.
 
     headline_only stops after the two-arm headline, skipping the axis decomposition,
     the alpha scan and the finite difference. Those are 12 of the 14 scoring passes,
     and the split-half reliability check needs only `runs_total`.
+
+    shuffle_seed permutes the situation columns within the unit, destroying any real
+    situation-shape relationship while preserving marginals — the placebo.
     """
+    if shuffle_seed is not None:
+        rng = np.random.default_rng(shuffle_seed)
+        situation_cols = [c for cols in cf.AXES.values() for c in cols]
+        group = group.copy()
+        group[situation_cols] = group[situation_cols].to_numpy()[rng.permutation(len(group))]
+
     location = location_design(group)
     design, axis_slices = cf.build_design(group, location)
     observed = group[SHAPE].to_numpy(float)
