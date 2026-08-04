@@ -319,8 +319,10 @@ make_leaderboard(low_adj_high_val |> select(all_of(resid_cols)),
 # runs_total = season runs from situational swing changes vs the de-situated counterfactual:
 # the swing the hitter would have made on the same pitch with count, base state and matchup held
 # at his own mean. Priced by xRV at the real count. Positive = adjusting earns you runs.
-# 93% of units are positive; the bottom table shows those gaining the LEAST, not losing runs.
-# Platoon column is 0 for switch-hitter units (platoon penalty not estimable within a single stance).
+# 93% of units are positive, but the bottom 20 are all negative (-1.68 to -0.12), so the trailers
+# table really is units losing runs, not merely gaining the least.
+# Platoon runs are near zero for switch-hitter units: within a single stance a switch hitter faces
+# almost no same-hand pitching, so there is little platoon variation left to de-situate.
 
 pol_raw <- read_parquet("data/optimal_policy.parquet",
                         col_select = c("batter_id", "label", "batter_stand",
@@ -358,7 +360,8 @@ pol_foot   <- paste0(
   "his own mean. Priced by xRV at the real count. Pitch type is a control, never ",
   "de-situated. 2024-25, min 400 swings. Marginal = runs per unit of extra situational ",
   "responsiveness at current behavior. ",
-  "Platoon = 0 for switch-hitter units (platoon penalty not estimable within a single stance).")
+  "Platoon is near zero for switch-hitter units, which face almost no same-hand pitching ",
+  "within a stance.")
 
 top_pol <- pol_raw |> head(TOP_N)
 bot_pol <- pol_raw |> tail(TOP_N) |> arrange(Runs) |> mutate(Rank = row_number())
