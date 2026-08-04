@@ -199,7 +199,11 @@ def main():
         "## Support constraint\n",
         f"- `alpha_at_boundary`: {100 * df['alpha_at_boundary'].mean():.0f}% of units\n",
         f"- median `alpha_star_supported`: {df['alpha_star_supported'].median():.2f}\n",
-        f"- mean `marginal_runs_per_alpha`: {df['marginal_runs_per_alpha'].mean():+.2f} runs\n",
+        f"- mean `marginal_runs_per_alpha`: {df['marginal_runs_per_alpha'].mean():+.2f} runs "
+        f"(counting stat: corr with `n_swings` = "
+        f"{df['marginal_runs_per_alpha'].corr(df['n_swings']):+.2f}, with `runs_total` = "
+        f"{df['marginal_runs_per_alpha'].corr(df['runs_total']):+.2f}; no per-swing version "
+        f"exists, so cross-hitter comparison on it is substantially playing time)\n",
         "",
         "## Placebo\n",
         ("Situation labels shuffled within unit, preserving marginals and destroying any "
