@@ -371,8 +371,8 @@ make_leaderboard(top_pol |> select(all_of(pol_cols)),
 
 make_leaderboard(bot_pol |> select(all_of(pol_cols)),
                  "Runs", pal_pol, pol_labels, pol_align,
-                 "**Counterfactual Adjustment Runs — Lowest Gainers**",
-                 sprintf("Units gaining the fewest runs from adjusting  &middot;  same pool (n=%d)  &middot;  color = Total Runs", n_pol),
+                 "**Counterfactual Adjustment Runs — Trailers**",
+                 sprintf("Units losing the most runs to situational swing changes  &middot;  same pool (n=%d)  &middot;  color = Total Runs", n_pol),
                  fig_path("adj_policy_bottom_gt.png"), footnote = pol_foot, width = 1050)
 
 cat("done\n")

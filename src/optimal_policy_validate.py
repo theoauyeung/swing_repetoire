@@ -144,6 +144,29 @@ def main():
 
     predictive_null = bool((pred["p"] > 0.05).all())
     placebo_failed = plac_ratio > 0.3
+    disjoint_r = float(conv.loc[conv["y"] == "twostrike_rv_penalty", "r"].iloc[0])
+    passing = ", ".join(f"`{o}`" for o in pred.loc[pred["p"] <= 0.05, "outcome"])
+    failing = ", ".join(f"`{o}`" for o in pred.loc[pred["p"] > 0.05, "outcome"])
+
+    if predictive_null and placebo_failed:
+        verdict = ("**Model artifact.** The predictive test is null and the placebo did not "
+                   "collapse. `runs_total` ships as a decomposition only; no leaderboard.\n")
+    elif predictive_null:
+        verdict = (f"**Qualified.** Every predictive outcome is null ({failing}). The placebo "
+                   f"collapses (ratio {plac_ratio:.2f}), so the machinery is not manufacturing "
+                   "value from noise, but nothing here shows `runs_total` tracks production.\n")
+    else:
+        verdict = (
+            f"**Qualified.** The placebo collapses (ratio {plac_ratio:.2f}), so `runs_total` is "
+            "not manufactured from noise. External support is thinner than that sounds. The "
+            f"predictive test is significant on {passing} and null on {failing}. "
+            "`rv_per_swing` is realized `delta_run_exp` — close to what xRV is trained to "
+            "reproduce, so it is the more circular of the two — while `woba_swing`, the less "
+            "circular outcome, is null. The one fully disjoint outcome-side convergent test, "
+            f"`runs_count` against `twostrike_rv_penalty`, is r = {disjoint_r:.3f}. Read "
+            "`runs_total` as an accounting decomposition with internal validity, not as a "
+            "validated predictor of run production.\n")
+
     lines = [
         "# Counterfactual adjustment value — validation\n",
         (f"2024-25, {len(df)} units. `runs_total` = season runs from situational swing "
@@ -186,14 +209,7 @@ def main():
          f"- ratio: {plac_ratio:.2f} (collapse expected — under ~0.3 is a pass)\n"),
         "",
         "## Verdict\n",
-        ("**Model artifact.** The predictive test is null and the placebo did not "
-         "collapse. `runs_total` ships as a decomposition only; no leaderboard.\n"
-         if (predictive_null and placebo_failed) else
-         "**Usable.** " + ("Predictive test null but the placebo collapses, so the "
-                           "machinery is not manufacturing value from noise.\n"
-                           if predictive_null else
-                           "The accounting tracks realized production after controlling "
-                           "for swing quality, and the placebo collapses.\n")),
+        verdict,
     ]
     out = ROOT / "results" / "optimal_policy.md"
     out.write_text("\n".join(lines), encoding="utf-8")
