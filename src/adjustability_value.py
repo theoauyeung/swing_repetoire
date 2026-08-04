@@ -1,20 +1,29 @@
-"""Adjustability value — multi-axis matched penalties + between-batter OLS.
+"""Adjustability value — matched penalties + between-batter OLS (wOBA headline).
 
-Three situational penalties (each vs empty-base reference within matched cells):
+Section 1 — Matched situational penalties (empirical delta_run_exp):
   twostrike_rv_penalty : 2-strike vs 0-1 strike            within (pitch_type × zone)
   gamestate_rv_penalty : any runner vs empty bases          within (pitch_type × zone × strikes)
   platoon_rv_penalty   : same-hand vs opp-hand matchup     within (pitch_type × zone × strikes)
 
-Each penalty is then regressed on its corresponding adjustment axis (+ swing_plus and
-repertoire_pctile as controls) in a between-batter OLS with clustered SE.
+Section 2 (HEADLINE) — Between-batter OLS with wOBA as the primary outcome.
+  Treatment: composite adjustability. Controls: swing_plus, repertoire_pctile.
+  wOBA is PA-weighted across 2024-25 from Baseball Savant (≥200 PA).
+
+Section 2b (diagnostic) — Same OLS structure but with each situational penalty as
+  the outcome and its matching adjustment axis as the treatment. Kept for situational
+  breakdowns; the wOBA regression is the headline specification.
+
+Section 3 (DML) — Swing-level fallback robustness check (commented out, ~30 min).
 
 Output: data/adjustability.parquet (updated), results/adjustability_value.md
 Run   : python src/adjustability_value.py
 """
 from pathlib import Path
+import io
 import sys
 import numpy as np
 import pandas as pd
+import requests
 from scipy import stats
 from sklearn.model_selection import KFold, GroupKFold
 from xgboost import XGBRegressor
@@ -214,7 +223,116 @@ def compute_swing_plus() -> pd.DataFrame:
     return result
 
 
-# ─── Section 2 helpers ────────────────────────────────────────────────────────
+# ─── Section 2 helpers: wOBA fetch + headline OLS ────────────────────────────
+
+_SAVANT_URL = (
+    "https://baseballsavant.mlb.com/leaderboard/custom"
+    "?year={year}&type=batter&filter=&sort=4&sortDir=desc"
+    "&min=100&selections=pa,woba&csv=true"
+)
+
+
+def fetch_woba(seasons: list, min_pa: int = 200) -> pd.DataFrame:
+    """Download per-season wOBA from Baseball Savant and return PA-weighted
+    pool across seasons. One row per batter_id with columns: batter_id, woba, total_pa.
+    """
+    frames = []
+    for yr in seasons:
+        url = _SAVANT_URL.format(year=yr)
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        df["woba"] = pd.to_numeric(
+            df["woba"].astype(str).str.strip('"'), errors="coerce"
+        )
+        df = df.rename(columns={"player_id": "batter_id"})[["batter_id", "pa", "woba"]]
+        frames.append(df)
+        print(f"  Savant {yr}: {len(df)} batters")
+
+    raw = pd.concat(frames, ignore_index=True)
+    pooled = (
+        raw[raw["woba"].notna()]
+        .groupby("batter_id")
+        .apply(
+            lambda g: pd.Series({
+                "woba":     np.average(g["woba"], weights=g["pa"]),
+                "total_pa": g["pa"].sum(),
+            })
+        )
+        .reset_index()
+    )
+    pooled = pooled[pooled["total_pa"] >= min_pa]
+    print(f"  Pooled: {len(pooled)} batters ≥{min_pa} PA  "
+          f"mean wOBA={pooled['woba'].mean():.3f}")
+    return pooled
+
+
+def run_woba_ols(adj: pd.DataFrame, woba: pd.DataFrame) -> list:
+    """
+    Headline between-batter OLS: wOBA as outcome, composite adjustability as
+    primary treatment, swing_plus and repertoire_pctile as controls.
+
+    wOBA is batter-level (not batter_stand); join on batter_id and cluster SE by
+    batter_id so switch-hitter units (L and R) are treated as dependent observations.
+
+    All variables z-scored. Returns markdown lines.
+    """
+    rep = pd.read_parquet(DATA / "repertoire_scores.parquet",
+                          columns=KEY + ["repertoire_pctile"])
+    base = (
+        adj
+        .merge(rep, on=KEY, how="inner")
+        .merge(woba[["batter_id", "woba"]], on="batter_id", how="inner")
+        .dropna(subset=["adjustability", "swing_plus", "repertoire_pctile", "woba"])
+    )
+    print(f"  wOBA OLS n={len(base)} units  unique batters={base['batter_id'].nunique()}")
+
+    def _z(s): return (s - s.mean()) / s.std()
+
+    y      = _z(base["woba"]).to_numpy(float)
+    sp_z   = _z(base["swing_plus"]).to_numpy(float)
+    rp_z   = _z(base["repertoire_pctile"]).to_numpy(float)
+    groups = base["batter_id"].to_numpy()
+
+    rows = []
+    for treat_col, label in [
+        ("adjustability", "composite adjustability"),
+        ("adj_count",     "adj_count"),
+        ("adj_gamestate", "adj_gamestate"),
+        ("adj_platoon",   "adj_platoon"),
+    ]:
+        t_z = _z(base[treat_col]).to_numpy(float)
+        X   = np.column_stack([np.ones(len(base)), sp_z, rp_z, t_z])
+        coefs, se, t_stats, p_vals, n, B = _ols_clustered(y, X, groups)
+        θ, θ_se, θ_t, θ_p = coefs[-1], se[-1], t_stats[-1], p_vals[-1]
+        rows.append(dict(
+            treatment=label,
+            theta=round(float(θ), 4),
+            se=round(float(θ_se), 4),
+            ci_lo=round(float(θ - 1.96 * θ_se), 4),
+            ci_hi=round(float(θ + 1.96 * θ_se), 4),
+            t=round(float(θ_t), 2),
+            p=round(float(θ_p), 4),
+            n=n, B=B,
+        ))
+        print(f"    wOBA / {label}: θ={θ:+.4f}  SE={θ_se:.4f}  t={θ_t:.2f}  p={θ_p:.4f}")
+
+    tab = pd.DataFrame(rows)
+    lines = [
+        "## Section 2 — Overall performance OLS (headline)\n",
+        ("Between-batter OLS: wOBA (PA-weighted 2024-25, Baseball Savant, ≥200 PA) as outcome. "
+         "Primary treatment: **composite adjustability**. Controls: swing_plus "
+         "(mean xrv_grade_neutral), repertoire_pctile. All variables z-scored. "
+         "Clustered SE by batter_id (switch-hitter L/R units treated as dependent). "
+         f"N={len(base)} (batter, stand) units from {base['batter_id'].nunique()} batters.\n"),
+        "Positive θ = more adjustable batters produce higher wOBA, net of swing quality.\n",
+        tab.to_markdown(index=False),
+        "",
+    ]
+    return lines
+
+
+# ─── Section 2b helpers: situational penalty OLS (diagnostic) ─────────────────
 
 def _ols_clustered(y: np.ndarray, X: np.ndarray,
                    groups: np.ndarray) -> tuple:
@@ -310,7 +428,8 @@ def run_ols(adj: pd.DataFrame) -> list:
 
     tab = pd.DataFrame(rows).drop(columns=["penalty"])
     lines = [
-        "## Between-batter OLS: multi-axis situational penalties\n",
+        "\n---\n",
+        "## Section 2b — Situational penalty OLS (diagnostic)\n",
         (f"2024-25, ≥{MIN_SWINGS} swings per (batter, stand). N varies by axis (see table). "
          "Each outcome is a per-batter weighted mean of (situation Δ) within matched cells "
          "(pitch_type × zone for two-strike; + strikes bucket for game-state and platoon). "
@@ -624,8 +743,14 @@ def main():
         sub = adj.dropna(subset=[col])
         print(f"  {col}: n={len(sub)}  mean={sub[col].mean():.4f}  median={sub[col].median():.4f}")
 
-    # ── Section 2: between-batter OLS ──
-    print("\n=== Section 2: between-batter OLS ===")
+    # ── Section 2: headline wOBA OLS ──
+    print("\n=== Section 2: overall performance OLS (wOBA, headline) ===")
+    print("  Fetching wOBA from Baseball Savant...")
+    woba = fetch_woba(SEASONS)
+    woba_lines = run_woba_ols(adj, woba)
+
+    # ── Section 2b: situational penalty OLS (diagnostic) ──
+    print("\n=== Section 2b: situational penalty OLS (diagnostic) ===")
     ols_lines = run_ols(adj)
 
     out = ROOT / "results" / "adjustability_value.md"
@@ -635,11 +760,12 @@ def main():
          "**Section 1:** matched situational penalties (empirical delta_run_exp). "
          "Two-strike: within pitch_type × zone. "
          "Game-state (any runner vs empty) and platoon: within pitch_type × zone × strikes. "
-         "**Section 2:** between-batter OLS with count-neutral swing_plus (xrv_grade_neutral) "
-         "as Swing+ control. "
+         "**Section 2 (headline):** between-batter OLS with wOBA as primary outcome; "
+         "composite adjustability as treatment; swing_plus and repertoire_pctile as controls. "
+         "**Section 2b (diagnostic):** same OLS with each situational penalty as outcome. "
          "**Section 3 (DML):** fallback robustness check.\n"),
     ]
-    out.write_text("\n".join(header + ols_lines), encoding="utf-8")
+    out.write_text("\n".join(header + woba_lines + ols_lines), encoding="utf-8")
     print(f"  Wrote {out}")
 
     # ── Section 3: DML (fallback, ~30 min) ──
