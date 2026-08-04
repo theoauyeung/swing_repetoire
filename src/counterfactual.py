@@ -97,7 +97,7 @@ def fraction_outside(shape, env):
 
 
 def admissible_alphas(shape_cf, shape_actual, env, grid=ALPHA_GRID, max_outside=MAX_OUTSIDE):
-    """Alphas keeping under max_outside of (swing, feature) pairs inside the hitter's own
+    """Alphas leaving under max_outside of (swing, feature) pairs outside the hitter's own
     observed envelope. Without this the scan pegs at the grid edge for most hitters —
     xRV extrapolates cheerfully into shapes nobody has ever made."""
     return [a for a in grid
