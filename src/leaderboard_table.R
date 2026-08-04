@@ -314,58 +314,65 @@ make_leaderboard(low_adj_high_val |> select(all_of(resid_cols)),
                  sprintf("Two-strike outcomes without the measured skill  &middot;  n=%d pool", n_pool),
                  fig_path("adjustability_resid_low_adj_high_val_gt.png"), footnote = resid_foot, width = 1000)
 
-# ── Seasonal Runs leaderboard (unit = batter x stand) ────────────────────────────────────────────
+# ── Optimal adjustment policy (unit = batter x stand) ────────────────────────────────────────────
 # Reads data/optimal_policy.parquet (written by src/optimal_policy.py).
-# Weighted total: t-stat proportional weights from OLS (2K 67.7% / GS 28.3% / platoon 4.1%).
-# Per-axis raw runs shown as context. Platoon column NA for switch-hitter units.
+# runs_total = season runs from situational swing changes vs the de-situated counterfactual:
+# the swing the hitter would have made on the same pitch with count, base state and matchup held
+# at his own mean. Priced by xRV at the real count. Positive = adjusting earns you runs.
+# 93% of units are positive; the bottom table shows those gaining the LEAST, not losing runs.
+# Platoon column is 0 for switch-hitter units (platoon penalty not estimable within a single stance).
 
 pol_raw <- read_parquet("data/optimal_policy.parquet",
-                        col_select = c("batter_id", "batter_stand", "label",
-                                       "season_runs_weighted", "season_runs_2k",
-                                       "season_runs_gamestate", "season_runs_platoon",
+                        col_select = c("batter_id", "label", "batter_stand",
+                                       "runs_total", "runs_count",
+                                       "runs_gamestate", "runs_platoon",
+                                       "marginal_runs_per_alpha",
                                        "adjustability_plus", "swing_plus")) |>
-  filter(!is.na(season_runs_weighted)) |>
+  filter(!is.na(runs_total)) |>
   mutate(
-    WtdRuns     = round(season_runs_weighted, 1),
-    Runs2K      = round(season_runs_2k, 1),
-    RunsGS      = round(season_runs_gamestate, 1),
-    RunsPlatoon = round(season_runs_platoon, 1),
-    AdjPlus     = round(adjustability_plus, 1),
-    SwingPlus   = round(swing_plus, 1)
+    Runs        = round(runs_total, 1),
+    RunsCount   = round(runs_count, 1),
+    RunsGS      = round(runs_gamestate, 1),
+    RunsPlatoon = round(runs_platoon, 1),
+    Marginal    = round(marginal_runs_per_alpha, 1),
+    Adj         = round(adjustability_plus, 1),
+    Swing       = round(swing_plus, 1)
   ) |>
-  arrange(desc(WtdRuns)) |>
+  arrange(desc(Runs)) |>
   mutate(Rank = row_number())
 
-n_pol       <- nrow(pol_raw)
-pal_pol     <- col_numeric(PAL_COLS, domain = range(pol_raw$WtdRuns, na.rm = TRUE))
+n_pol    <- nrow(pol_raw)
+pal_pol  <- col_numeric(PAL_COLS, domain = range(pol_raw$Runs, na.rm = TRUE))
 
 pol_cols   <- c("Rank", "batter_id", "label", "batter_stand",
-                "WtdRuns", "Runs2K", "RunsGS", "RunsPlatoon", "AdjPlus", "SwingPlus")
+                "Runs", "RunsCount", "RunsGS", "RunsPlatoon", "Marginal", "Adj", "Swing")
 pol_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
-                   WtdRuns = "Wtd Runs", Runs2K = "2K Runs",
-                   RunsGS = "GS Runs", RunsPlatoon = "Platoon Runs",
-                   AdjPlus = "Adj+", SwingPlus = "Swing+")
-pol_align  <- c("Rank", "batter_stand", "WtdRuns", "Runs2K", "RunsGS", "RunsPlatoon",
-                "AdjPlus", "SwingPlus")
+                   Runs = "Total Runs", RunsCount = "Count",
+                   RunsGS = "Game St", RunsPlatoon = "Platoon",
+                   Marginal = "Marginal", Adj = "Adj+", Swing = "Swing+")
+pol_align  <- c("Rank", "batter_stand", "Runs", "RunsCount", "RunsGS", "RunsPlatoon",
+                "Marginal", "Adj", "Swing")
 pol_foot   <- paste0(
-  "n=", n_pol, " qualified units (≥400 swings, 2024-25). ",
-  "Wtd Runs = OLS t-stat weighted sum (2K 67.7% / GS 28.3% / platoon 4.1%). ",
-  "Per-axis runs = delta_run_exp × annual swing exposure; raw values shown for context. ",
-  "Platoon runs shown as '-' for switch-hitter units (near-zero same-hand exposure within stance).")
+  "Season runs from situational swing changes vs a de-situated counterfactual: the swing ",
+  "the hitter would have made on the same pitch with count, base state and matchup held at ",
+  "his own mean. Priced by xRV at the real count. Pitch type is a control, never ",
+  "de-situated. 2024-25, min 400 swings. Marginal = runs per unit of extra situational ",
+  "responsiveness at current behavior. ",
+  "Platoon = 0 for switch-hitter units (platoon penalty not estimable within a single stance).")
 
 top_pol <- pol_raw |> head(TOP_N)
-bot_pol <- pol_raw |> tail(TOP_N) |> arrange(WtdRuns) |> mutate(Rank = row_number())
+bot_pol <- pol_raw |> tail(TOP_N) |> arrange(Runs) |> mutate(Rank = row_number())
 
 make_leaderboard(top_pol |> select(all_of(pol_cols)),
-                 "WtdRuns", pal_pol, pol_labels, pol_align,
-                 "**Seasonal Situational Runs — Leaders**",
-                 sprintf("Evidence-weighted runs from situational performance  &middot;  n=%d  &middot;  color = Wtd Runs", n_pol),
+                 "Runs", pal_pol, pol_labels, pol_align,
+                 "**Counterfactual Adjustment Runs — Leaders**",
+                 sprintf("Season runs gained from situational swing changes  &middot;  n=%d  &middot;  color = Total Runs", n_pol),
                  fig_path("adj_policy_top_gt.png"), footnote = pol_foot, width = 1050)
 
 make_leaderboard(bot_pol |> select(all_of(pol_cols)),
-                 "WtdRuns", pal_pol, pol_labels, pol_align,
-                 "**Seasonal Situational Runs — Worst Performers**",
-                 sprintf("Most evidence-weighted runs lost  &middot;  same pool (n=%d)  &middot;  color = Wtd Runs", n_pol),
+                 "Runs", pal_pol, pol_labels, pol_align,
+                 "**Counterfactual Adjustment Runs — Lowest Gainers**",
+                 sprintf("Units gaining the fewest runs from adjusting  &middot;  same pool (n=%d)  &middot;  color = Total Runs", n_pol),
                  fig_path("adj_policy_bottom_gt.png"), footnote = pol_foot, width = 1050)
 
 cat("done\n")
