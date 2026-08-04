@@ -64,7 +64,6 @@ def fit_batter(X_raw):
     # Identifiability bound: need at least 1 swing per free parameter per component
     max_n_clusters = max(1, n_swings // PARAMS_PER_COMP)
 
-    best_n_clusters = 1
     best_model      = None
     best_bic_score  = np.inf
     stagnant_rounds = 0
@@ -74,7 +73,6 @@ def fit_batter(X_raw):
                               n_init=N_INIT, reg_covar=1e-5, random_state=SEED).fit(X_scaled)
         bic_score = gmm.bic(X_scaled)
         if bic_score < best_bic_score - 1e-6:
-            best_n_clusters = n_clusters
             best_model      = gmm
             best_bic_score  = bic_score
             stagnant_rounds = 0

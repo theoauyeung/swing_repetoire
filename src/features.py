@@ -19,7 +19,6 @@ Output: data/swings_model.parquet  (competitive tracked swings, features + conte
 Run:  python src/features.py
 """
 from pathlib import Path
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
