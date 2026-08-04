@@ -177,7 +177,8 @@ def main():
             "runs_interaction", "runs_total_2k"]].describe().round(3).to_markdown(),
         "",
         "## Convergent validity\n",
-        ("`runs_count` against the matched penalties from `adjustability_value.py`, which "
+        ("`runs_count` against the matched penalties from `adjustability_value_first_draft.py`, "
+         "which "
          "share no machinery with this build — they use realized `delta_run_exp` within "
          "`pitch_type x zone` cells.\n"),
         conv.to_markdown(index=False),
