@@ -225,7 +225,7 @@ def main():
             .merge(primary, on=KEY, how="left")
             .merge(rep, on=KEY, how="left"))
 
-    out = DATA / "optimal_policy.parquet"
+    out = DATA / ("optimal_policy_subset.parquet" if args.limit else "optimal_policy.parquet")
     df.to_parquet(out, index=False)
     print(f"\nWrote {len(df)} rows -> {out}")
 

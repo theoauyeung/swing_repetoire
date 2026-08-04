@@ -97,8 +97,16 @@ def fraction_outside(shape, env):
 
 
 def admissible_alphas(shape_cf, shape_actual, env, grid=ALPHA_GRID, max_outside=MAX_OUTSIDE):
-    """Alphas leaving under max_outside of (swing, feature) pairs outside the hitter's own
-    observed envelope. Without this the scan pegs at the grid edge for most hitters —
-    xRV extrapolates cheerfully into shapes nobody has ever made."""
+    """Alphas for which fewer than max_outside of (swing, feature) pairs fall outside
+    the unit's own observed 1st–99th percentile envelope.
+
+    The filter rejects blended shapes that venture into regions the hitter has never
+    actually occupied, preventing xRV from extrapolating into out-of-sample territory.
+    In practice this constraint rarely binds: across the 2024-25 cohort, 406 of 471
+    units (86%) still land at the grid maximum alpha=2.0, and 88.5% are at a boundary.
+    The reason is that the envelope is built from OBSERVED shape percentiles, which span
+    the hitter's full empirical spread, while the situational component of the fitted
+    shapes is far narrower — blending out to alpha=2 almost never leaves that wide
+    envelope."""
     return [a for a in grid
             if fraction_outside(blend(shape_cf, shape_actual, a), env) < max_outside]
