@@ -59,7 +59,7 @@ def predictive(df):
             _z(d["swing_plus"]).to_numpy(float),
             _z(d["runs_per_swing"]).to_numpy(float),
         ])
-        coefs, se, t, p, n, B = _ols_clustered(y, X, d["batter_id"].to_numpy())
+        coefs, se, t, p, n, _ = _ols_clustered(y, X, d["batter_id"].to_numpy())
         rows.append({"outcome": outcome, "n": n,
                      "theta": round(float(coefs[-1]), 4),
                      "se": round(float(se[-1]), 4),

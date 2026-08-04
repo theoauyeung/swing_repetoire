@@ -56,12 +56,6 @@ def arrow(x0, y0, x1, y1, color, lw=2.0):
                 ))
 
 
-def badge(cx, cy, w, h, text):
-    ax.text(cx + w / 2 - 0.006, cy + h / 2 + 0.006, text,
-            ha="right", va="bottom", fontsize=7.5, style="italic",
-            color="#555555", transform=ax.transAxes, zorder=4)
-
-
 # ── Layout constants ─────────────────────────────────────────────────────────
 XL, XC, XR = 0.17, 0.50, 0.83
 H    = 0.080   # standard box height
