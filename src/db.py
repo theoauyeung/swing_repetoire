@@ -1,4 +1,5 @@
-"""Local DuckDB connection with views over all project parquets and CSVs.
+"""Opens every project data file as a queryable table so you can ask questions in SQL instead of
+loading files by hand. Handy for one-off checks like "who are the top 10 by adjustability".
 
 Usage
 -----

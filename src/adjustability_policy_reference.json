@@ -1,0 +1,22 @@
+{
+  "seasons": [
+    2024,
+    2025
+  ],
+  "shape_features": [
+    "swing_path_tilt",
+    "swing_length",
+    "bat_speed",
+    "vert_attack_angle",
+    "horz_attack_angle_pull"
+  ],
+  "shape_sd": {
+    "swing_path_tilt": 6.8459412251346485,
+    "swing_length": 0.8612988861409504,
+    "bat_speed": 5.53384566164261,
+    "vert_attack_angle": 10.51408539107774,
+    "horz_attack_angle_pull": 17.21774507719345
+  },
+  "policy_quantile": 0.9,
+  "displacement_cap": 0.4736214908889854
+}

@@ -1,12 +1,9 @@
-"""Counterfactual de-situated swing shapes — pure numeric core.
+"""Builds the "what would his swing have looked like if the situation hadn't moved him"
+comparison swing. Pure math, no files and no run-value model, so the piece where a quiet
+bug would poison every published number can be tested on its own.
 
-No I/O and no xRV. This module turns a unit's swing table into fitted actual and
-counterfactual shape matrices, so the pieces where a silent bug would corrupt every
-published number can be unit-tested without loading models or data.
-
-The counterfactual sets each situation axis's dummies to their unit MEAN rather than to
-a reference category. That is mean-preserving: the hitter's average swing is unchanged
-and only situational variation is removed.
+The comparison swing keeps his average swing exactly as it is and strips out only the
+part that moves with the count, the baserunners and the pitcher's hand.
 """
 import numpy as np
 import pandas as pd
@@ -22,21 +19,52 @@ AXES = {
 # reflects being fooled, so de-situating it removes consequence rather than policy.
 CONTROL_COLS = ["pitch_group"]
 
+# Fixed league-wide category sets for the POLICY block. build_design's per-unit
+# get_dummies yields a different column set for any unit missing a category, so those
+# coefficient blocks would not be conformable and could not be swapped between hitters.
+SITUATION_LEVELS = {
+    "balls":          ["0", "1", "2", "3"],
+    "strikes":        ["0", "1", "2"],
+    "base_state":     ["empty", "on1", "risp"],
+    "outs_when_up":   ["0", "1", "2"],
+    "pitcher_throws": ["L", "R"],
+}
+SITUATION_COLS = [c for cols in AXES.values() for c in cols]
+
 N_FOLDS = 5
 SEED = 7
-ALPHA_GRID = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+N_REPLACEMENTS = 10
+# Fine near alpha=1, where any realistic prescription lives; coarse past 3.0, where the
+# only job is to locate the turn. The old grid stopped at 2.0, below the peak, which is
+# why 86% of units pegged at its ceiling and alpha* was a grid artifact.
+ALPHA_GRID = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0]
+AXIS_ALPHA_GRID = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
 ENVELOPE_LO, ENVELOPE_HI = 1.0, 99.0
 MAX_OUTSIDE = 0.05
+POLICY_QUANTILE = 0.90
+GRAD_STEP_SD = 0.1
+POLICY_STEP_SD = 0.25
+MIN_CELL_SWINGS = 25
 
 
-def build_design(group, location_matrix):
-    """[location | pitch_group | count | gamestate | platoon] and the axis column slices."""
+def build_design(group, location_matrix, extra_controls=None):
+    """[location | pitch_group | extra | count | gamestate | platoon] + axis column slices.
+
+    `extra_controls` is an optional numeric block of pitch characteristics (velocity,
+    movement, spin, release). Like pitch_group it is a CONTROL and is never de-situated:
+    without it the situation dummies absorb count-correlated velocity and break, which the
+    swing reacts to mechanically, and that reaction is then scored as volitional adjustment.
+    """
     blocks = [location_matrix]
     width = location_matrix.shape[1]
 
     control = pd.get_dummies(group[CONTROL_COLS].astype(str), drop_first=True).to_numpy(float)
     blocks.append(control)
     width += control.shape[1]
+
+    if extra_controls is not None:
+        blocks.append(extra_controls)
+        width += extra_controls.shape[1]
 
     axis_slices = {}
     for axis, cols in AXES.items():
@@ -46,6 +74,43 @@ def build_design(group, location_matrix):
         width += dummies.shape[1]
 
     return np.column_stack(blocks), axis_slices
+
+
+def centered_situation(group):
+    """Mean-centered dummy matrix on fixed league levels, plus per-axis row slices.
+
+    Centering makes a policy block a map from "how unusual this situation is" to a
+    displacement, so applying one hitter's block to another's situations transfers only
+    the situational response and not a level shift.
+    """
+    blocks, axis_rows, width = [], {}, 0
+    for axis, cols in AXES.items():
+        start = width
+        for col in cols:
+            values = group[col].astype(str).to_numpy()
+            levels = SITUATION_LEVELS[col]
+            blocks.append(np.stack([(values == lv).astype(float) for lv in levels], axis=1))
+            width += len(levels)
+        axis_rows[axis] = slice(start, width)
+    matrix = np.column_stack(blocks)
+    return matrix - matrix.mean(axis=0, keepdims=True), axis_rows
+
+
+def fit_policy(centered, displacement):
+    """Least-squares read of a displacement (in league-SD units) on the centered situation.
+
+    Rank-deficient by construction — each column group's dummies sum to a constant — so
+    lstsq's minimum-norm solution is the intended one.
+    """
+    policy, *_ = np.linalg.lstsq(centered, displacement, rcond=None)
+    return policy
+
+
+def swap_axis(own_policy, repl_policy, axis_rows, axis):
+    """Own policy with one axis's rows replaced by the replacement's."""
+    out = own_policy.copy()
+    out[axis_rows[axis]] = repl_policy[axis_rows[axis]]
+    return out
 
 
 def desituate(X, axis_slices, axes_off):
@@ -110,3 +175,48 @@ def admissible_alphas(shape_cf, shape_actual, env, grid=ALPHA_GRID, max_outside=
     envelope."""
     return [a for a in grid
             if fraction_outside(blend(shape_cf, shape_actual, a), env) < max_outside]
+
+
+def axis_blend(shape_actual, shape_axis, shape_cf, alpha):
+    """Shape with one axis at intensity alpha and the other axes left at observed intensity.
+
+    Exact, with no extra regression: desituating an axis is a linear operation on the
+    design and the prediction is linear in it, so the per-axis contributions
+    (shape_axis - shape_cf) sum exactly to (shape_actual - shape_cf).
+    """
+    return shape_actual + (alpha - 1.0) * (shape_axis - shape_cf)
+
+
+def mean_displacement(shape_actual, shape_cf, scale):
+    """Unit-level D_u: mean Euclidean norm of per-swing situational displacement, in SD units."""
+    return float(np.linalg.norm((shape_actual - shape_cf) / scale, axis=1).mean())
+
+
+def policy_alphas(d_u, cap, grid=ALPHA_GRID):
+    """Alphas whose scaled displacement stays inside the league-referenced cap.
+
+    Asks whether the proposed level of situational modulation is one major-league hitters
+    actually sustain. Non-circular: the reference is the cohort, not this hitter's own
+    fitted range, which would degenerate to alpha <= 1.
+    """
+    if not np.isfinite(d_u) or d_u <= 0:
+        return list(grid)
+    # The cap is a quantile OF the d_u values, so the unit defining it lands exactly on the
+    # boundary at alpha=1 and must not be rejected by float error.
+    return [a for a in grid if a * d_u <= cap * (1 + 1e-9)]
+
+
+def cell_labels(group):
+    """Interpretable situation cells for the prescriptive layer, one label array per axis.
+
+    Coarser than the axes the de-situation uses: prescriptions are read per cell, and the
+    full balls x strikes x base x outs cross is too thin to estimate a per-cell gradient.
+    """
+    strikes = group["strikes"].to_numpy()
+    same_hand = group["pitcher_throws"].to_numpy() == group["batter_stand"].to_numpy()
+    return {
+        "count": np.where(strikes >= 2, "2 strikes",
+                          np.where(strikes == 1, "1 strike", "0 strikes")),
+        "gamestate": group["base_state"].to_numpy().astype(str),
+        "platoon": np.where(same_hand, "same-hand", "opp-hand"),
+    }

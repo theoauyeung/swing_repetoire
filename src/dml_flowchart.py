@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate DML process flowchart for adjustability_value methodology (swing-level DML)."""
+"""Draws the diagram explaining how the swing-level causal estimate is put together. Presentation
+only — it reads nothing and changes no numbers."""
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

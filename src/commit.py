@@ -1,6 +1,5 @@
-"""
-commit.py
-Auto-commits changes to git when files are saved.
+"""Watches the project folder and commits to git on its own once edits stop. Convenience only,
+nothing to do with the analysis.
 
 Usage:
     .venv\Scripts\python.exe src\commit.py

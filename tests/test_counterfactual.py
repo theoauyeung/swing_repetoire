@@ -103,3 +103,64 @@ def test_admissible_alphas_excludes_extrapolation():
     assert 0.0 in ok
     assert 2.0 not in ok
     assert ok == sorted(ok)
+
+
+def test_alpha_grid_extends_past_the_turn():
+    """The value curve peaks near alpha=4; a grid stopping at 2.0 reports a truncation."""
+    assert max(cf.ALPHA_GRID) >= 6.0
+    assert cf.ALPHA_GRID == sorted(cf.ALPHA_GRID)
+
+
+def test_axis_contributions_sum_to_the_total(group):
+    """axis_blend relies on exact additivity of the per-axis contributions."""
+    rng = np.random.default_rng(4)
+    loc = rng.normal(size=(len(group), 6))
+    X, slices = cf.build_design(group, loc)
+    fits = cf.crossfit_shapes(X, rng.normal(size=(len(group), 5)))
+    actual = cf.predict_oof(X, fits, 5)
+    base = cf.predict_oof(cf.desituate(X, slices, list(cf.AXES)), fits, 5)
+
+    total = np.zeros_like(actual)
+    for axis in cf.AXES:
+        others = [a for a in cf.AXES if a != axis]
+        total += cf.predict_oof(cf.desituate(X, slices, others), fits, 5) - base
+    assert np.allclose(total, actual - base)
+
+
+def test_axis_blend_moves_only_its_own_axis():
+    actual = np.array([[10.0, 20.0]])
+    base = np.array([[4.0, 6.0]])
+    axis = np.array([[6.0, 10.0]])  # contributes +2, +4
+    assert np.allclose(cf.axis_blend(actual, axis, base, 1.0), actual)
+    assert np.allclose(cf.axis_blend(actual, axis, base, 0.0), [[8.0, 16.0]])
+    assert np.allclose(cf.axis_blend(actual, axis, base, 2.0), [[12.0, 24.0]])
+
+
+def test_mean_displacement_is_in_scale_units():
+    base = np.zeros((4, 2))
+    actual = np.array([[3.0, 4.0]] * 4)
+    assert cf.mean_displacement(actual, base, np.array([1.0, 1.0])) == pytest.approx(5.0)
+    assert cf.mean_displacement(actual, base, np.array([3.0, 4.0])) == pytest.approx(np.sqrt(2))
+
+
+def test_policy_alphas_caps_scaled_displacement():
+    ok = cf.policy_alphas(0.4, 0.6, grid=[0.0, 0.5, 1.0, 1.5, 2.0])
+    assert ok == [0.0, 0.5, 1.0, 1.5]  # 1.5 * 0.4 = 0.6 exactly, admitted
+    # an already-high modulator is told he is close to the ceiling
+    assert max(cf.policy_alphas(0.58, 0.6, grid=[0.0, 0.5, 1.0, 1.5, 2.0])) == 1.0
+    # a degenerate unit is not silently capped to nothing
+    assert cf.policy_alphas(0.0, 0.6, grid=[0.0, 1.0]) == [0.0, 1.0]
+
+
+def test_cell_labels_cover_all_three_axes():
+    frame = pd.DataFrame({
+        "strikes":        [0, 1, 2, 2],
+        "base_state":     ["empty", "on1", "risp", "risp"],
+        "pitcher_throws": ["R", "L", "R", "L"],
+        "batter_stand":   ["R", "R", "L", "L"],
+    })
+    cells = cf.cell_labels(frame)
+    assert set(cells) == {"count", "gamestate", "platoon"}
+    assert list(cells["count"]) == ["0 strikes", "1 strike", "2 strikes", "2 strikes"]
+    assert list(cells["gamestate"]) == ["empty", "on1", "risp", "risp"]
+    assert list(cells["platoon"]) == ["same-hand", "opp-hand", "opp-hand", "same-hand"]

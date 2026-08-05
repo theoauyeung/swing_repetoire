@@ -1,672 +1,505 @@
-"""Adjustability value — multi-axis matched penalties + between-batter OLS.
+"""Scores whether a hitter's situational adjustments are actually worth runs. On every pitch
+he saw, we swap in the way a randomly picked other hitter would have adjusted, re-grade both
+swings, and add up the difference over a season.
 
-Three situational penalties (each vs empty-base reference within matched cells):
-  twostrike_rv_penalty : 2-strike vs 0-1 strike            within (pitch_type × zone)
-  gamestate_rv_penalty : any runner vs empty bases          within (pitch_type × zone × strikes)
-  platoon_rv_penalty   : same-hand vs opp-hand matchup     within (pitch_type × zone × strikes)
+That comparison is the whole point. Grading him against "not adjusting at all" made 96% of the
+league look good at it, which is a benchmark problem, not a finding. Grading him against
+another real hitter puts about half the league on each side.
 
-Each penalty is then regressed on its corresponding adjustment axis (+ swing_plus and
-repertoire_pctile as controls) in a between-batter OLS with clustered SE.
+For every swing we ask what this hitter's swing would have looked like on this exact
+pitch under a DIFFERENT situational policy, and price both through xRV.
 
-Output: data/adjustability.parquet (updated), results/adjustability_value.md
-Run   : python src/adjustability_value.py
+    runs_total = sum over swings of [ xRV(his adjustment) - xRV(a replacement hitter's) ]
+
+The benchmark is another randomly drawn hitter's situation->shape policy applied to his
+situations, averaged over N_REPLACEMENTS draws. "Replacement" here means a randomly drawn
+big-leaguer from this same cohort, NOT WAR's replacement-level talent — the bar is an
+average major-league adjuster, not a fringe one. The earlier benchmark was his own de-situated
+swing — "adjusting vs not adjusting at all" — which can only point one way whenever the
+adjustment tracks the pitch: 93.4% of units scored positive, the ranking correlated
++0.63 with playing time, and elite hitters sat near the bottom. That quantity survives as
+the diagnostic `runs_vs_desituated`; it is an accounting decomposition, not a skill
+measure. A replacement is precision-matched — his policy block carries the same estimation
+noise as the hitter's own — so roughly half the cohort scores negative by construction.
+
+Pitch characteristics (velocity, movement, spin, release) are controls in the shape
+regression alongside location and pitch_group. Without them the situation dummies absorb
+the pitch mix that comes with the count and the swing's mechanical reaction to it is
+scored as volition.
+
+On top of that accounting sit two prescriptive layers. The alpha scan asks HOW MUCH to
+modulate, capped at the level a 90th-percentile league modulator sustains. The per-dial
+gradient asks WHICH LEVER: for each situation cell it reports what a +1 SD move on each
+shape dial is worth, beside how far the hitter already moves it there.
+
+Output: data/adjustability_value.parquet     (unit level)
+        data/adjustability_gradients.parquet (unit x axis x cell x dial)
+Run   : python src/adjustability_value.py            (full, ~10 min)
+        python src/adjustability_value.py --verify   (scoring correctness check only)
+        python src/adjustability_value.py --limit 25 (fast subset for iteration)
 """
-from pathlib import Path
+import argparse
+import json
 import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from scipy import stats
-from sklearn.model_selection import KFold, GroupKFold
-from xgboost import XGBRegressor
+from xgboost import XGBClassifier, XGBRegressor
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import db  # noqa: E402
-from adjustability import location_design, add_context  # noqa: E402
-from adjustability import DIALS, KEY, SEASONS, MIN_SWINGS               # noqa: E402
 
-SEASONS_SQL = "(" + ", ".join(str(s) for s in SEASONS) + ")"
+import counterfactual as cf                                          # noqa: E402
+import pitch_controls as pc                                          # noqa: E402
+import xRV_model as xrv                                              # noqa: E402
+from adjustability import KEY, MIN_SWINGS, SEASONS                   # noqa: E402
+from adjustability import add_context, location_design               # noqa: E402
 
-# ─── Section 1 helpers ────────────────────────────────────────────────────────
+SHAPE = xrv.SHAPE_FEATURES
+POLICY_REF = ROOT / "src" / "adjustability_policy_reference.json"
+LOAD_COLS = KEY + [
+    "play_id", "game_pk", "game_year", "batter_full_name", "balls", "strikes", "outs_when_up",
+    "plate_x", "plate_z", "sz_top", "sz_bot", "pitch_type", "pitcher_throws",
+    "on_1b_id", "on_2b_id", "on_3b_id", "delta_run_exp", "woba",
+] + SHAPE
 
-def compute_matched_penalties() -> pd.DataFrame:
+
+def load_models():
+    """The three persisted boosters from src/xRV_model.py."""
+    specs = [("p_bip", XGBClassifier), ("p_foul", XGBClassifier), ("v_bip", XGBRegressor)]
+    models = {}
+    for name, cls in specs:
+        model = cls(enable_categorical=True)
+        model.load_model(DATA / "xrv_models" / f"{name}.json")
+        models[name] = model
+    return models
+
+
+def load_swings(with_pitch_chars=True):
+    """2024-25 swings for qualifying units, with pitch_type categories fixed league-wide.
+
+    The cast happens once on the full frame. build_features calls astype("category"),
+    which infers categories from whatever it is handed — scoring per-unit frames would
+    give each unit its own category codes and silently misalign every prediction.
     """
-    Per-batter matched two-strike penalty via DuckDB (empirical delta_run_exp).
+    df = pd.read_parquet(DATA / "swings_model.parquet", columns=LOAD_COLS)
+    df = df[df["game_year"].isin(SEASONS)]
+    df["pitch_type"] = df["pitch_type"].astype("category")
+    df = add_context(df).dropna(subset=SHAPE)
+    if with_pitch_chars:
+        df = pc.join_pitch_chars(df)
+    sizes = df.groupby(KEY, observed=True)[SHAPE[0]].transform("size")
+    return df[sizes >= MIN_SWINGS].reset_index(drop=True)
 
-    Within each (batter, pitch_type × plate_zone) cell that has ≥3 two-strike
-    AND ≥3 early-count (0-1 strike) swings, compute:
-        Δrv    = mean delta_run_exp at 2 strikes − mean delta_run_exp at 0-1 strikes
-        Δwhiff = mean is_whiff      at 2 strikes − mean is_whiff      at 0-1 strikes
 
-    Uses realized delta_run_exp (not xrv_grade) because xrv_grade conditions on count
-    — the rv layer mechanically penalises 2-strike swings (rv_whiff = lw_K − ERV(b,2))
-    regardless of the batter, so Δxrv would capture count mechanics, not adjustment skill.
+def score_shapes(models, run_value_tables, group, shape_matrix):
+    """Per-swing xRV for `group`'s pitches with its shape columns overwritten.
 
-    Per-batter penalty = weighted mean of Δ across cells (weights = n_2k in cell).
-
-    Returns columns: batter_id, batter_stand, twostrike_rv_penalty,
-                     twostrike_whiff_penalty, matched_n_2k, matched_cells.
+    assemble_xrv (not the neutral variant) so two-strike stakes stay live: the mechanism
+    under test is whether compression buys enough contact to pay for the strikeout risk.
     """
-    con = db.connect("swings")
-    result = con.sql(f"""
-    WITH base AS (
-        SELECT batter_id, batter_stand,
-               (strikes = 2)::INT     AS twoK,
-               delta_run_exp,
-               is_whiff::DOUBLE       AS is_whiff,
-               pitch_type || '|' || plate_zone::VARCHAR AS zone_pitch
-        FROM swings
-        WHERE game_year IN {SEASONS_SQL}
-          AND delta_run_exp IS NOT NULL
-    ),
-    unit_n AS (
-        SELECT batter_id, batter_stand
-        FROM base
-        GROUP BY batter_id, batter_stand
-        HAVING COUNT(*) >= {MIN_SWINGS}
-    ),
-    cell AS (
-        SELECT b.batter_id, b.batter_stand, b.zone_pitch,
-               AVG(delta_run_exp) FILTER (WHERE twoK = 1) AS mu_rv_2k,
-               AVG(delta_run_exp) FILTER (WHERE twoK = 0) AS mu_rv_early,
-               AVG(is_whiff)      FILTER (WHERE twoK = 1) AS mu_wh_2k,
-               AVG(is_whiff)      FILTER (WHERE twoK = 0) AS mu_wh_early,
-               COUNT(*)           FILTER (WHERE twoK = 1) AS n_2k,
-               COUNT(*)           FILTER (WHERE twoK = 0) AS n_early
-        FROM base b
-        INNER JOIN unit_n u USING (batter_id, batter_stand)
-        GROUP BY b.batter_id, b.batter_stand, b.zone_pitch
-        HAVING COUNT(*) FILTER (WHERE twoK = 1) >= 3
-           AND COUNT(*) FILTER (WHERE twoK = 0) >= 3
-    )
-    SELECT batter_id, batter_stand,
-           SUM(n_2k::DOUBLE * (mu_rv_2k  - mu_rv_early)) / SUM(n_2k) AS twostrike_rv_penalty,
-           SUM(n_2k::DOUBLE * (mu_wh_2k  - mu_wh_early)) / SUM(n_2k) AS twostrike_whiff_penalty,
-           SUM(n_2k)::INTEGER  AS matched_n_2k,
-           COUNT(*)::INTEGER   AS matched_cells
-    FROM cell
-    GROUP BY batter_id, batter_stand
-    """).df()
-    con.close()
-    return result
+    frame = group.copy()
+    for j, feature in enumerate(SHAPE):
+        frame[feature] = shape_matrix[:, j]
+    enriched = xrv.build_features(frame)
+    prob_bip  = models["p_bip"].predict_proba(enriched[xrv.FEATURES])[:, 1]
+    prob_foul = models["p_foul"].predict_proba(enriched[xrv.FEATURES])[:, 1]
+    value_bip = models["v_bip"].predict(enriched[xrv.FEATURES])
+    return xrv.assemble_xrv(enriched, prob_bip, prob_foul, value_bip, run_value_tables)
 
 
-def compute_gamestate_penalty() -> pd.DataFrame:
+def shape_gradients(models, run_value_tables, group, shape_matrix, scale):
+    """Per-swing d(xRV)/d(dial), in runs per +1 league SD, by central difference.
+
+    Probed at the OBSERVED shapes: the advice is about the swings the hitter actually
+    takes, and that is where xRV is best supported. The +/- 0.1 SD step keeps the probe
+    inside the shape cloud, so this reads a local slope rather than extrapolating.
     """
-    Broad game-state penalty: any runner on base vs empty, within (pitch_type × zone × strikes).
+    out = np.empty_like(shape_matrix)
+    for j in range(shape_matrix.shape[1]):
+        up, down = shape_matrix.copy(), shape_matrix.copy()
+        up[:, j] += cf.GRAD_STEP_SD * scale[j]
+        down[:, j] -= cf.GRAD_STEP_SD * scale[j]
+        out[:, j] = (score_shapes(models, run_value_tables, group, up)
+                     - score_shapes(models, run_value_tables, group, down)) / (2 * cf.GRAD_STEP_SD)
+    return out
 
-    Collapses all runner configurations (1B, 2B, 3B, combinations) into "any runner" vs.
-    the "empty" reference. Using the full range of base-occupied states aligns with how
-    adj_gamestate is constructed (base_state = risp | on1 | empty, plus outs_when_up) and
-    yields near-complete unit coverage (471/471 units). Earlier RISP+0-out / DP-avoid
-    specifications recovered only 267 and 428 units respectively, cutting power unnecessarily.
 
-    Strikes in the matching key holds count fixed.
+def prescriptions(group, gradients, shifts, cells):
+    """One long row per (situation cell, dial): what the dial pays, and what he already does.
+
+    `grad_runs_per_sd` is what a +1 SD move on that dial buys per swing in this cell.
+    `shift_sd` is how far his fitted swing already moves it there. The prescription is the
+    gap between them. Both are signed — negative means move the dial down.
+
+    `grad_delta_runs_per_sd` subtracts the hitter's own all-swing gradient, which is what
+    makes the advice situational. The raw cell gradient is dominated by his baseline, so
+    ranking on it would just surface the largest cell for every hitter; the delta says
+    where THIS situation differs from how he normally hits.
     """
-    con = db.connect("swings")
-    result = con.sql(f"""
-    WITH base AS (
-        SELECT batter_id, batter_stand,
-               (on_1b_id IS NOT NULL OR on_2b_id IS NOT NULL OR on_3b_id IS NOT NULL) AS any_runner,
-               (on_1b_id IS NULL AND on_2b_id IS NULL AND on_3b_id IS NULL)            AS empty,
-               delta_run_exp,
-               is_whiff::DOUBLE AS is_whiff,
-               pitch_type || '|' || plate_zone::VARCHAR || '|' || strikes::VARCHAR AS match_key
-        FROM swings
-        WHERE game_year IN {SEASONS_SQL}
-          AND delta_run_exp IS NOT NULL
-    ),
-    unit_n AS (
-        SELECT batter_id, batter_stand FROM base
-        GROUP BY batter_id, batter_stand HAVING COUNT(*) >= {MIN_SWINGS}
-    ),
-    cells AS (
-        SELECT b.batter_id, b.batter_stand, b.match_key,
-               AVG(delta_run_exp) FILTER (WHERE any_runner) AS mu_rv_runner,
-               AVG(delta_run_exp) FILTER (WHERE empty)      AS mu_rv_empty,
-               AVG(is_whiff)      FILTER (WHERE any_runner) AS mu_wh_runner,
-               AVG(is_whiff)      FILTER (WHERE empty)      AS mu_wh_empty,
-               COUNT(*)           FILTER (WHERE any_runner) AS n_runner,
-               COUNT(*)           FILTER (WHERE empty)      AS n_empty
-        FROM base b INNER JOIN unit_n u USING (batter_id, batter_stand)
-        GROUP BY b.batter_id, b.batter_stand, b.match_key
-        HAVING COUNT(*) FILTER (WHERE any_runner) >= 3
-           AND COUNT(*) FILTER (WHERE empty)      >= 3
-    )
-    SELECT batter_id, batter_stand,
-           SUM(n_runner::DOUBLE * (mu_rv_runner  - mu_rv_empty)) / SUM(n_runner) AS gamestate_rv_penalty,
-           SUM(n_runner::DOUBLE * (mu_wh_runner  - mu_wh_empty)) / SUM(n_runner) AS gamestate_whiff_penalty,
-           SUM(n_runner)::INTEGER AS gamestate_n,
-           COUNT(*)::INTEGER      AS gamestate_cells
-    FROM cells GROUP BY batter_id, batter_stand
-    """).df()
-    con.close()
-    return result
-
-
-def compute_platoon_penalty() -> pd.DataFrame:
-    """
-    Arm-side (same-hand) penalty: same-hand matchups vs opposite-hand matchups,
-    within (pitch_type × zone × strikes). Positive = hitter loses more run value
-    against same-hand pitchers (normal platoon disadvantage).
-
-    Strikes in the matching key holds count fixed so arm-side effects aren't
-    confounded by the pitch mix pitchers throw in two-strike counts.
-    """
-    con = db.connect("swings")
-    result = con.sql(f"""
-    WITH base AS (
-        SELECT batter_id, batter_stand,
-               (batter_stand = pitcher_throws)::INT AS same_hand,
-               delta_run_exp,
-               is_whiff::DOUBLE AS is_whiff,
-               pitch_type || '|' || plate_zone::VARCHAR || '|' || strikes::VARCHAR AS match_key
-        FROM swings
-        WHERE game_year IN {SEASONS_SQL}
-          AND delta_run_exp IS NOT NULL
-          AND pitcher_throws IS NOT NULL
-    ),
-    unit_n AS (
-        SELECT batter_id, batter_stand FROM base
-        GROUP BY batter_id, batter_stand HAVING COUNT(*) >= {MIN_SWINGS}
-    ),
-    cell AS (
-        SELECT b.batter_id, b.batter_stand, b.match_key,
-               AVG(delta_run_exp) FILTER (WHERE same_hand = 1) AS mu_rv_same,
-               AVG(delta_run_exp) FILTER (WHERE same_hand = 0) AS mu_rv_opp,
-               AVG(is_whiff)      FILTER (WHERE same_hand = 1) AS mu_wh_same,
-               AVG(is_whiff)      FILTER (WHERE same_hand = 0) AS mu_wh_opp,
-               COUNT(*)           FILTER (WHERE same_hand = 1) AS n_same,
-               COUNT(*)           FILTER (WHERE same_hand = 0) AS n_opp
-        FROM base b INNER JOIN unit_n u USING (batter_id, batter_stand)
-        GROUP BY b.batter_id, b.batter_stand, b.match_key
-        HAVING COUNT(*) FILTER (WHERE same_hand = 1) >= 3
-           AND COUNT(*) FILTER (WHERE same_hand = 0) >= 3
-    )
-    SELECT batter_id, batter_stand,
-           SUM(n_same::DOUBLE * (mu_rv_same - mu_rv_opp)) / SUM(n_same) AS platoon_rv_penalty,
-           SUM(n_same::DOUBLE * (mu_wh_same - mu_wh_opp)) / SUM(n_same) AS platoon_whiff_penalty,
-           SUM(n_same)::INTEGER AS platoon_n,
-           COUNT(*)::INTEGER    AS platoon_cells
-    FROM cell GROUP BY batter_id, batter_stand
-    """).df()
-    con.close()
-    return result
-
-
-def compute_swing_plus() -> pd.DataFrame:
-    """Per-batter mean xrv_grade_neutral over all 2024-25 swings.
-
-    Uses the count-neutral grade (league-average run values in the assembly layer) so
-    swing_plus is not confounded by count distribution when used as a control alongside
-    count-stratified outcomes such as twostrike_rv_penalty.
-    """
-    con = db.connect("xrv_swings")
-    result = con.sql(f"""
-        SELECT batter_id, batter_stand, AVG(xrv_grade_neutral) AS swing_plus
-        FROM xrv_swings
-        WHERE game_year IN {SEASONS_SQL}
-        GROUP BY batter_id, batter_stand
-    """).df()
-    con.close()
-    return result
-
-
-# ─── Section 2 helpers ────────────────────────────────────────────────────────
-
-def _ols_clustered(y: np.ndarray, X: np.ndarray,
-                   groups: np.ndarray) -> tuple:
-    """
-    OLS with clustered sandwich SE (clustered by groups).
-    Returns (coefs, se, t_stats, p_vals, n, B).
-    B = number of clusters; df = B - 1.
-    """
-    coefs, *_ = np.linalg.lstsq(X, y, rcond=None)
-    resid = y - X @ coefs
-    n, k  = X.shape
-
-    XtX_inv = np.linalg.pinv(X.T @ X)
-    meat    = np.zeros((k, k))
-    unique_groups = np.unique(groups)
-    B = len(unique_groups)
-    for g in unique_groups:
-        mask  = groups == g
-        score = X[mask].T @ resid[mask]
-        meat += np.outer(score, score)
-    meat *= B / (B - 1)  # small-sample correction
-
-    vcov    = XtX_inv @ meat @ XtX_inv
-    se      = np.sqrt(np.clip(np.diag(vcov), 0, None))
-    t_stats = np.where(se > 0, coefs / se, np.nan)
-    p_vals  = np.where(
-        se > 0,
-        [2 * float(stats.t.sf(abs(t), df=B - 1)) for t in t_stats],
-        np.nan,
-    )
-    return coefs, se, t_stats, p_vals, n, B
-
-
-_AXIS_PENALTIES = [
-    # (penalty_col, primary_treat_col, scope_label, primary_treat_label)
-    ("twostrike_rv_penalty",  "adj_count",     "Two-strike",          "adj_count"),
-    ("gamestate_rv_penalty",  "adj_gamestate", "Any runner vs empty", "adj_gamestate"),
-    ("platoon_rv_penalty",    "adj_platoon",   "Arm-side (same-hand)","adj_platoon"),
-]
-
-
-def run_ols(adj: pd.DataFrame) -> list:
-    """
-    Between-batter OLS for each situational penalty against its axis + controls.
-
-    For each penalty in _AXIS_PENALTIES, fits:
-        penalty_z ~ treat_z + swing_plus_z + repertoire_pctile_z
-
-    Primary treatment is the axis-specific column; composite adjustability is also
-    tested as a secondary row. adj_pitch is excluded from the headline (reactive axis —
-    hitters cannot choose pitch type before the pitch is thrown).
-
-    All variables z-scored. Clustered SE by batter_id. Returns markdown lines.
-    """
-    rep = pd.read_parquet(DATA / "repertoire_scores.parquet",
-                          columns=KEY + ["repertoire_pctile"])
-    base = adj.merge(rep, on=KEY, how="inner")
-
-    def _z(s): return (s - s.mean()) / s.std()
-
+    overall = gradients.mean(axis=0)
     rows = []
-    for penalty_col, primary_treat, scope_label, _ in _AXIS_PENALTIES:
-        df = base.dropna(subset=[penalty_col, primary_treat, "swing_plus", "repertoire_pctile"])
-        if len(df) < 50:
-            print(f"  OLS skipped ({scope_label} / {penalty_col}): only {len(df)} complete rows")
-            continue
-        print(f"  OLS {scope_label} n={len(df)}")
-
-        y      = _z(df[penalty_col]).to_numpy(float)
-        sp_z   = _z(df["swing_plus"]).to_numpy(float)
-        rp_z   = _z(df["repertoire_pctile"]).to_numpy(float)
-        groups = df["batter_id"].to_numpy()
-
-        for treat_col in [primary_treat, "adjustability"]:
-            label = treat_col if treat_col == primary_treat else "composite adjustability"
-            t_z = _z(df[treat_col]).to_numpy(float)
-            X   = np.column_stack([np.ones(len(df)), sp_z, rp_z, t_z])
-            coefs, se, t_stats, p_vals, n, B = _ols_clustered(y, X, groups)
-            θ, θ_se, θ_t, θ_p = coefs[-1], se[-1], t_stats[-1], p_vals[-1]
-            rows.append(dict(
-                scope=scope_label,
-                treatment=label,
-                penalty=penalty_col,
-                theta=round(float(θ), 4),
-                se=round(float(θ_se), 4),
-                ci_lo=round(float(θ - 1.96 * θ_se), 4),
-                ci_hi=round(float(θ + 1.96 * θ_se), 4),
-                t=round(float(θ_t), 2),
-                p=round(float(θ_p), 4),
-                n=n, B=B,
-            ))
-            print(f"    {scope_label} / {label}: θ={θ:+.4f}  SE={θ_se:.4f}  t={θ_t:.2f}  p={θ_p:.4f}")
-
-    tab = pd.DataFrame(rows).drop(columns=["penalty"])
-    lines = [
-        "## Between-batter OLS: multi-axis situational penalties\n",
-        (f"2024-25, ≥{MIN_SWINGS} swings per (batter, stand). N varies by axis (see table). "
-         "Each outcome is a per-batter weighted mean of (situation Δ) within matched cells "
-         "(pitch_type × zone for two-strike; + strikes bucket for game-state and platoon). "
-         "All variables z-scored. Clustered SE by batter_id.\n"),
-        "**Controls:** swing_plus (mean xrv_grade_neutral), repertoire_pctile.\n",
-        "Positive θ = more adjustable batters have a *less negative* (better) penalty.\n",
-        "**Notes:** (1) adj_pitch excluded — pitch-type identification is reactive "
-        "(hitters cannot choose arm slot before the pitch is thrown), not a volitional lever. "
-        "(2) Platoon N excludes switch-hitter units: within a (batter_id, batter_stand) unit, "
-        "switch hitters face almost exclusively opposite-hand pitchers, leaving near-zero "
-        "same-hand swings; those units do not survive the ≥3/≥3 cell filter.\n",
-        tab.to_markdown(index=False),
-        "",
-    ]
-    return lines
+    for axis, labels in cells.items():
+        for cell in pd.unique(labels):
+            mask = labels == cell
+            n_cell = int(mask.sum())
+            if n_cell < cf.MIN_CELL_SWINGS:
+                continue
+            for j, dial in enumerate(SHAPE):
+                grad = float(gradients[mask, j].mean())
+                delta = grad - float(overall[j])
+                shift = float(shifts[mask, j].mean())
+                season_swings = n_cell / N_SEASONS
+                rows.append({
+                    "batter_id": group["batter_id"].iloc[0],
+                    "batter_stand": group["batter_stand"].iloc[0],
+                    "axis": axis,
+                    "cell": cell,
+                    "dial": dial,
+                    "n_swings": n_cell,
+                    "grad_runs_per_sd": grad,
+                    "grad_delta_runs_per_sd": delta,
+                    "shift_sd": shift,
+                    "runs_from_shift": grad * shift * season_swings,
+                    "runs_per_quarter_sd": grad * cf.POLICY_STEP_SD * season_swings,
+                    "situational_runs_per_quarter_sd": delta * cf.POLICY_STEP_SD * season_swings,
+                })
+    return rows
 
 
-# ─── Section 3: swing-level DML (fallback) ────────────────────────────────────
+def load_policy_reference(swings):
+    """Frozen league scale and displacement cap, or a fresh scale if not yet pegged.
 
-TREATMENTS = ["adjustability", "adj_count", "adj_gamestate", "adj_pitch", "adj_platoon"]
-AXES = {
-    "count":     ["balls", "strikes"],
-    "gamestate": ["base_state", "outs_when_up"],
-    "pitch":     ["pitch_group"],
-    "platoon":   ["pitcher_throws"],
-}
-
-N_INNER_FOLDS = 5
-N_OUTER_FOLDS = 5
-SEED          = 42
-CORR_WARN     = 0.6
-MAX_STD_SHIFT = 1.5
-
-XGB_PARAMS = dict(
-    n_estimators=300, max_depth=3, learning_rate=0.05,
-    subsample=0.8, colsample_bytree=0.8,
-    reg_lambda=3.0, reg_alpha=1.0, min_child_weight=5,
-    random_state=SEED, verbosity=0,
-)
-
-CONFOUNDER_CAT = ["base_state", "pitch_group", "pitcher_throws"]
-CONFOUNDER_NUM = ["px", "pz", "px2", "pz2", "pxpz", "balls", "strikes",
-                  "outs_when_up", "pitcher_quality"]
-
-
-def build_axis_dummies(group: pd.DataFrame, axes: dict) -> tuple:
-    pieces = []
-    axis_slices = {}
-    col_offset = 0
-    for axis_name, cols in axes.items():
-        dum = pd.get_dummies(group[cols].astype(str), drop_first=True).to_numpy(float)
-        axis_slices[axis_name] = slice(col_offset, col_offset + dum.shape[1])
-        pieces.append(dum)
-        col_offset += dum.shape[1]
-    sit_matrix = np.column_stack(pieces) if pieces else np.zeros((len(group), 0))
-    return sit_matrix, axis_slices
-
-
-def build_swing_treatments(df: pd.DataFrame, axes: dict) -> pd.DataFrame:
-    axis_names = list(axes.keys())
-    records = []
-
-    for (batter_id, stand), group in df.groupby(KEY, sort=False):
-        if len(group) < MIN_SWINGS:
-            continue
-
-        group = group.reset_index(drop=True)
-        n = len(group)
-
-        loc_full              = location_design(group)
-        sit_full, axis_slices = build_axis_dummies(group, axes)
-        n_loc                 = loc_full.shape[1]
-        X_full                = np.column_stack([loc_full, sit_full])
-
-        T = {name: np.full(n, np.nan) for name in ["composite"] + axis_names}
-
-        kf = KFold(n_splits=N_INNER_FOLDS, shuffle=True, random_state=SEED)
-        for train_idx, val_idx in kf.split(X_full):
-            X_train, X_val = X_full[train_idx], X_full[val_idx]
-            dial_shifts = {name: np.zeros((len(val_idx), len(DIALS)))
-                           for name in ["composite"] + axis_names}
-
-            for d_idx, dial in enumerate(DIALS):
-                y_train = group.loc[train_idx, dial].to_numpy(float)
-                dial_sd = float(y_train.std())
-                if dial_sd == 0:
-                    continue
-                coefs, *_ = np.linalg.lstsq(X_train, y_train, rcond=None)
-                sit_coefs = coefs[n_loc:]
-
-                raw = X_val[:, n_loc:] @ sit_coefs
-                dial_shifts["composite"][:, d_idx] = np.abs(
-                    np.clip(raw / dial_sd, -MAX_STD_SHIFT, MAX_STD_SHIFT)
-                )
-                for axis_name, slc in axis_slices.items():
-                    axis_coefs = sit_coefs[slc]
-                    raw_axis   = X_val[:, n_loc + slc.start: n_loc + slc.stop] @ axis_coefs
-                    dial_shifts[axis_name][:, d_idx] = np.abs(
-                        np.clip(raw_axis / dial_sd, -MAX_STD_SHIFT, MAX_STD_SHIFT)
-                    )
-
-            for name in ["composite"] + axis_names:
-                T[name][val_idx] = dial_shifts[name].mean(axis=1)
-
-        for i in range(n):
-            records.append({
-                "batter_id":    batter_id,
-                "batter_stand": stand,
-                "swing_idx":    i,
-                "T_composite":  T["composite"][i],
-                **{f"T_{ax}": T[ax][i] for ax in axis_names},
-            })
-
-    return pd.DataFrame(records)
-
-
-def load_swings() -> pd.DataFrame:
-    return add_context(pd.read_parquet(
-        DATA / "swings_model.parquet",
-        columns=KEY + [
-            "game_year", "batter_full_name",
-            "balls", "strikes", "outs_when_up",
-            "plate_x", "plate_z", "sz_top", "sz_bot",
-            "pitch_type", "pitcher_throws",
-            "on_1b_id", "on_2b_id", "on_3b_id",
-            "pitcher_id", "delta_run_exp", "is_whiff",
-        ] + DIALS,
-    ).query("game_year in @SEASONS"))
-
-
-def build_pitcher_quality(df: pd.DataFrame) -> pd.Series:
-    return df.groupby("pitcher_id")["delta_run_exp"].mean().rename("pitcher_quality")
-
-
-def validate_treatments(treats: pd.DataFrame) -> float:
-    agg = treats.groupby(KEY)["T_composite"].mean().rename("T_composite_agg").reset_index()
-    ref = pd.read_parquet(DATA / "adjustability.parquet", columns=KEY + ["adjustability"])
-    merged = agg.merge(ref, on=KEY, how="inner")
-    r = float(merged["T_composite_agg"].corr(merged["adjustability"]))
-    print(f"  Validation: swing-level composite vs batter-level adjustability r={r:.3f}  "
-          f"(n={len(merged)})")
-    if r < CORR_WARN:
-        print(f"  WARNING: r={r:.3f} < {CORR_WARN} — treatment may have diverged from intent")
-    return r
-
-
-def assemble_analysis_df(df: pd.DataFrame, treats: pd.DataFrame) -> tuple:
-    df = df.reset_index(drop=True)
-    df["swing_idx"] = df.groupby(KEY).cumcount()
-
-    merged = df.merge(treats, on=KEY + ["swing_idx"], how="inner")
-    merged["px2"]  = merged["px"] ** 2
-    merged["pz2"]  = merged["pz"] ** 2
-    merged["pxpz"] = merged["px"] * merged["pz"]
-
-    cat_dummies = pd.get_dummies(merged[CONFOUNDER_CAT].astype(str), drop_first=True)
-    result = pd.concat(
-        [merged[["batter_id", "batter_stand",
-                  "delta_run_exp", "is_whiff"]
-                 + [f"T_{ax}" for ax in list(AXES.keys())]
-                 + ["T_composite"]
-                 + CONFOUNDER_NUM].reset_index(drop=True),
-         cat_dummies.reset_index(drop=True)],
-        axis=1,
-    )
-    return result, CONFOUNDER_NUM + cat_dummies.columns.tolist()
-
-
-def dml_swing(df: pd.DataFrame, treatment_col: str, outcome_col: str,
-              confounder_cols: list) -> tuple:
+    Follows the repertoire_reference.json precedent so prescriptions stay comparable as
+    seasons are added. League aggregates only, no PII. Delete the file to re-peg.
     """
-    Swing-level DML. Robinson (1988) partial linear model.
-    Known limitation: per-axis treatments are partially constructed from the same
-    variables used as confounders, which can inflate r2_T and compress θ.
-    Retained as a robustness check; between-batter OLS (Section 2) is the headline.
-    """
-    df = (df.dropna(subset=[treatment_col, outcome_col] + confounder_cols)
-            .copy()
-            .reset_index(drop=True))
-
-    for col in [treatment_col, outcome_col] + confounder_cols:
-        df[col] = df[col] - df.groupby("batter_id")[col].transform("mean")
-
-    T_raw = df[treatment_col].to_numpy(float)
-    Y_raw = df[outcome_col].to_numpy(float)
-    T_std, Y_std = T_raw.std(), Y_raw.std()
-    T = T_raw / T_std if T_std > 0 else T_raw
-    Y = Y_raw / Y_std if Y_std > 0 else Y_raw
-
-    X          = df[confounder_cols].to_numpy(float)
-    batter_ids = df["batter_id"].to_numpy()
-    n          = len(df)
-
-    T_resid = np.zeros(n)
-    Y_resid = np.zeros(n)
-
-    gkf = GroupKFold(n_splits=N_OUTER_FOLDS)
-    for train_idx, val_idx in gkf.split(X, groups=batter_ids):
-        model_T = XGBRegressor(**XGB_PARAMS)
-        model_T.fit(X[train_idx], T[train_idx])
-        T_resid[val_idx] = T[val_idx] - model_T.predict(X[val_idx])
-
-        model_Y = XGBRegressor(**XGB_PARAMS)
-        model_Y.fit(X[train_idx], Y[train_idx])
-        Y_resid[val_idx] = Y[val_idx] - model_Y.predict(X[val_idx])
-
-    theta = float(np.dot(T_resid, Y_resid) / np.dot(T_resid, T_resid))
-
-    psi          = T_resid * (Y_resid - theta * T_resid)
-    cluster_sums = pd.Series(psi, index=batter_ids).groupby(level=0).sum()
-    B            = len(cluster_sums)
-    mean_sq_T    = float(np.mean(T_resid ** 2))
-    var_theta    = float((cluster_sums ** 2).sum()) / (mean_sq_T ** 2) / n ** 2 * (B / (B - 1))
-    se           = float(np.sqrt(max(var_theta, 0.0)))
-
-    t = theta / se if se > 0 else np.nan
-    p = float(2 * stats.t.sf(abs(t), df=B - 1)) if se > 0 else np.nan
-
-    r2_T = float(1 - np.sum(T_resid**2) / np.sum((T - T.mean())**2))
-    r2_Y = float(1 - np.sum(Y_resid**2) / np.sum((Y - Y.mean())**2))
-
-    return theta, se, t, p, n, r2_T, r2_Y
-
-
-def run_dml(analysis_df: pd.DataFrame, confounder_cols: list) -> list:
-    """Run all DML specs and return markdown lines."""
-    treat_col = {
-        "adjustability": "T_composite",
-        "adj_count":     "T_count",
-        "adj_gamestate": "T_gamestate",
-        "adj_pitch":     "T_pitch",
-        "adj_platoon":   "T_platoon",
+    if POLICY_REF.exists():
+        return json.loads(POLICY_REF.read_text())
+    return {
+        "seasons": SEASONS,
+        "shape_features": SHAPE,
+        "shape_sd": swings[SHAPE].std(ddof=0).astype(float).to_dict(),
+        "policy_quantile": cf.POLICY_QUANTILE,
+        "displacement_cap": None,
     }
-    df_2k = analysis_df[analysis_df["strikes"] == 2].copy()
-
-    specs = [
-        ("Season-wide", analysis_df, "delta_run_exp", "Run value per swing"),
-        ("Season-wide", analysis_df, "is_whiff",      "Whiff rate"),
-        ("Two-strike",  df_2k,       "delta_run_exp", "Two-strike run value"),
-        ("Two-strike",  df_2k,       "is_whiff",      "Two-strike whiff rate"),
-    ]
-
-    rows = []
-    for treatment in TREATMENTS:
-        for scope, data, outcome, label in specs:
-            print(f"  DML: {treatment} / {scope} / {outcome}...")
-            theta, se, t, p, n, r2_T, r2_Y = dml_swing(
-                data, treat_col[treatment], outcome, confounder_cols
-            )
-            rows.append(dict(
-                treatment=treatment, scope=scope, outcome=label, n=n,
-                theta=round(theta, 4), se=round(se, 4),
-                ci_lo=round(theta - 1.96 * se, 4),
-                ci_hi=round(theta + 1.96 * se, 4),
-                t=round(t, 2), p=round(p, 4),
-                r2_T=round(r2_T, 3), r2_Y=round(r2_Y, 3),
-            ))
-            print(f"    θ={theta:+.4f}  SE={se:.4f}  t={t:.2f}  p={p:.4f}"
-                  f"  r2_T={r2_T:.3f}  r2_Y={r2_Y:.3f}")
-
-    tab = pd.DataFrame(rows)
-    lines = [
-        "\n---\n",
-        "## Swing-level DML (robustness / fallback)\n",
-        (f"N ≈ {len(analysis_df):,} swings (2024-25, ≥{MIN_SWINGS} swings per unit). "
-         "Treatment = per-swing fitted situational shift magnitude from within-batter "
-         f"5-fold cross-fitting, averaged across 3 dials in within-batter SD units. "
-         "Robinson (1988) partial linear model. Within-batter demeaning for batter FE. "
-         "GroupKFold (batter_id) XGBoost nuisance models. Clustered SE by batter.\n"),
-        "**Note:** per-axis treatments (T_count, T_pitch, etc.) share variables with confounders, "
-        "which may inflate r2_T and compress θ toward zero. "
-        "The between-batter OLS above is the primary specification.\n",
-        tab.to_markdown(index=False),
-        "",
-    ]
-    return lines
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+def verify_scoring(models, run_value_tables, swings, n_units=5):
+    """Score OBSERVED shapes and compare to the published xrv column.
+
+    This is the category-alignment guard. If pitch_type codes were misaligned the
+    deviation would be large and obvious.
+    """
+    units = list(dict.fromkeys(zip(swings["batter_id"], swings["batter_stand"])))[:n_units]
+    published = pd.read_parquet(DATA / "xrv_swings.parquet", columns=["play_id", "xrv"])
+    worst = 0.0
+    for batter_id, stand in units:
+        group = swings[(swings["batter_id"] == batter_id)
+                       & (swings["batter_stand"] == stand)]
+        got = score_shapes(models, run_value_tables, group, group[SHAPE].to_numpy(float))
+        merged = (pd.DataFrame({"play_id": group["play_id"].to_numpy(), "got": got})
+                  .merge(published, on="play_id", how="inner"))
+        if merged.empty:
+            raise AssertionError(f"no play_id overlap for {batter_id} {stand}")
+        worst = max(worst, float((merged["got"] - merged["xrv"]).abs().max()))
+    return worst
+
+
+N_SEASONS = len(SEASONS)
+AXIS_NAMES = list(cf.AXES)
+
+
+def unit_fit(group, scale, shuffle_seed=None):
+    """Pass 1: this unit's cross-fitted shapes and its situation->shape policy block.
+
+    The policy block maps a CENTERED situation row to a displacement in league-SD units,
+    so it is conformable and comparable across hitters with different dial ranges — that
+    is what makes it transferable to another hitter's situations in pass 2.
+
+    shuffle_seed permutes the situation columns within the unit, destroying any real
+    situation-shape relationship while preserving marginals — the placebo.
+    """
+    if shuffle_seed is not None:
+        rng = np.random.default_rng(shuffle_seed)
+        group = group.copy()
+        group[cf.SITUATION_COLS] = (
+            group[cf.SITUATION_COLS].to_numpy()[rng.permutation(len(group))])
+
+    design, axis_slices = cf.build_design(group, location_design(group),
+                                          pc.control_matrix(group))
+    observed = group[SHAPE].to_numpy(float)
+    fits = cf.crossfit_shapes(design, observed)
+    shape_actual = cf.predict_oof(design, fits, len(SHAPE))
+    shape_cf = cf.predict_oof(cf.desituate(design, axis_slices, AXIS_NAMES),
+                              fits, len(SHAPE))
+    centered, axis_rows = cf.centered_situation(group)
+    displacement = (shape_actual - shape_cf) / scale
+    return {
+        "group": group, "design": design, "axis_slices": axis_slices, "fits": fits,
+        "observed": observed, "shape_actual": shape_actual, "shape_cf": shape_cf,
+        "displacement": displacement, "centered": centered, "axis_rows": axis_rows,
+        "policy": cf.fit_policy(centered, displacement),
+    }
+
+
+def unit_record(models, run_value_tables, fit, scale, blocks=None, index=None,
+                n_replacements=cf.N_REPLACEMENTS, headline_only=False):
+    """Pass 2: run accounting against the replacement benchmark, alpha scan, per-dial gradients.
+
+    Returns the record plus two private keys the caller must pop: `_alpha_curve` (needed
+    only after the cohort-wide displacement cap is known) and `_prescriptions` (long rows
+    for the gradient parquet).
+
+    headline_only skips everything needing extra scoring passes; the split-half and
+    placebo checks need only the headline arms.
+    """
+    group, shape_cf = fit["group"], fit["shape_cf"]
+    shape_actual, observed = fit["shape_actual"], fit["observed"]
+    centered, displacement = fit["centered"], fit["displacement"]
+    scale = np.asarray([scale[f] for f in SHAPE], dtype=float)
+
+    def score_disp(disp_sd):
+        return score_shapes(models, run_value_tables, group, shape_cf + disp_sd * scale)
+
+    xrv_cf = score_shapes(models, run_value_tables, group, shape_cf)
+    xrv_actual = score_shapes(models, run_value_tables, group, shape_actual)
+    is_two_strike = group["strikes"].to_numpy() == 2
+
+    record = {
+        "batter_id":    group["batter_id"].iloc[0],
+        "batter_stand": group["batter_stand"].iloc[0],
+        "n_swings":     len(group),
+        "runs_vs_desituated": float((xrv_actual - xrv_cf).sum() / N_SEASONS),
+        "displacement_sd":    float(np.linalg.norm(displacement, axis=1).mean()),
+        "xrv_actual_mean":    float(xrv_actual.mean()),
+        "xrv_cf_mean":        float(xrv_cf.mean()),
+    }
+
+    # Replacement arms. Each draw substitutes a randomly chosen other hitter's policy block —
+    # wholly for the headline, one axis at a time for the decomposition — and re-scores
+    # the same pitches. Averaging over draws is what makes the benchmark "a typical
+    # individual" rather than one arbitrary hitter.
+    if blocks is not None and n_replacements:
+        rng = np.random.default_rng(cf.SEED + index)
+        picks = rng.choice([j for j in range(len(blocks)) if j != index],
+                           size=min(n_replacements, len(blocks) - 1), replace=False)
+        full = np.zeros(len(group))
+        by_axis = {axis: np.zeros(len(group)) for axis in AXIS_NAMES}
+        for j in picks:
+            full += score_disp(centered @ blocks[j])
+            for axis in AXIS_NAMES:
+                swapped = cf.swap_axis(fit["policy"], blocks[j], fit["axis_rows"], axis)
+                by_axis[axis] += score_disp(centered @ swapped)
+        per_swing_delta = xrv_actual - full / len(picks)
+        record["n_replacements"] = len(picks)
+        record["runs_total"] = float(per_swing_delta.sum() / N_SEASONS)
+        record["runs_total_2k"] = float(per_swing_delta[is_two_strike].sum() / N_SEASONS)
+        record["runs_per_swing"] = float(per_swing_delta.mean())
+        axis_sum = 0.0
+        for axis in AXIS_NAMES:
+            value = float((xrv_actual - by_axis[axis] / len(picks)).sum() / N_SEASONS)
+            record[f"runs_{axis}"] = value
+            axis_sum += value
+        record["runs_interaction"] = record["runs_total"] - axis_sum
+
+    if headline_only:
+        return record
+
+    def season_runs(shape_matrix, baseline):
+        return float((score_shapes(models, run_value_tables, group, shape_matrix)
+                      - baseline).sum() / N_SEASONS)
+
+    axis_shapes = {}
+    for axis in AXIS_NAMES:
+        others = [a for a in AXIS_NAMES if a != axis]
+        design_one = cf.desituate(fit["design"], fit["axis_slices"], others)
+        axis_shapes[axis] = cf.predict_oof(design_one, fit["fits"], len(SHAPE))
+
+    # The observed-percentile envelope stays as a hard rail. It is no longer the binding
+    # constraint — it is built from observed shapes, whose execution noise (~1.5 SD) dwarfs
+    # the situational displacement (~0.37 SD) being blended, so it almost never rejects.
+    env = cf.envelope(observed)
+    admissible = cf.admissible_alphas(shape_cf, shape_actual, env)
+    curve = {a: season_runs(cf.blend(shape_cf, shape_actual, a), xrv_cf) for a in admissible}
+    peak = max(curve, key=curve.get) if curve else float("nan")
+    record["alpha_peak_unconstrained"] = peak
+    record["alpha_peak_at_boundary"] = bool(
+        admissible and peak in (min(admissible), max(admissible))
+    )
+
+    for axis in AXIS_NAMES:
+        axis_curve = {}
+        for a in cf.AXIS_ALPHA_GRID:
+            shape_a = cf.axis_blend(shape_actual, axis_shapes[axis], shape_cf, a)
+            if cf.fraction_outside(shape_a, env) < cf.MAX_OUTSIDE:
+                axis_curve[a] = season_runs(shape_a, xrv_cf)
+        record[f"alpha_star_{axis}"] = (max(axis_curve, key=axis_curve.get)
+                                        if axis_curve else float("nan"))
+        # Flatness detector: a near-zero range means the argmax is noise, not a policy.
+        record[f"runs_range_{axis}"] = (max(axis_curve.values()) - min(axis_curve.values())
+                                        if axis_curve else float("nan"))
+
+    lo = season_runs(cf.blend(shape_cf, shape_actual, 0.9), xrv_cf)
+    hi = season_runs(cf.blend(shape_cf, shape_actual, 1.1), xrv_cf)
+    record["marginal_runs_per_alpha"] = (hi - lo) / 0.2
+
+    gradients = shape_gradients(models, run_value_tables, group, observed, scale)
+    record["_alpha_curve"] = curve
+    record["_prescriptions"] = prescriptions(
+        group, gradients, (shape_actual - shape_cf) / scale, cf.cell_labels(group))
+    return record
+
+
+def axis_top_levers(gradients):
+    """Per unit, the most situational dial within EACH axis, and what moving it is worth.
+
+    One roll-up per axis rather than a single overall argmax: the count axis carries an
+    order of magnitude more situational gradient than the other two, so an overall winner
+    would read `count` for essentially every hitter and hide the gamestate and platoon
+    prescriptions entirely. Values stay signed — negative means move the dial down.
+    """
+    ranked = gradients.assign(gain=gradients["situational_runs_per_quarter_sd"].abs())
+    out = None
+    for axis, block in ranked.groupby("axis"):
+        best = block.loc[block.groupby(KEY)["gain"].idxmax()]
+        levers = best[KEY].copy()
+        levers[f"top_lever_{axis}"] = (best["cell"] + "/" + best["dial"]).to_numpy()
+        levers[f"top_lever_{axis}_runs"] = best["situational_runs_per_quarter_sd"].to_numpy()
+        out = levers if out is None else out.merge(levers, on=KEY, how="outer")
+    return out
+
 
 def main():
-    # ── Section 1: matched penalties ──
-    print("=== Section 1: matched situational penalties ===")
-    two_strike  = compute_matched_penalties()
-    game_state  = compute_gamestate_penalty()
-    platoon     = compute_platoon_penalty()
-    swing_plus  = compute_swing_plus()
-    print(f"  two-strike:  {len(two_strike)} units")
-    print(f"  game-state:  {len(game_state)} units (any runner vs empty)")
-    print(f"  platoon:     {len(platoon)} units (switch hitters excluded — near-zero same_hand within unit)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--repeg", action="store_true",
+                        help="recompute the displacement cap and rewrite the reference")
+    args = parser.parse_args()
 
-    adj = pd.read_parquet(DATA / "adjustability.parquet")
-    stale = [
-        "twostrike_xrv_penalty", "twostrike_rv_penalty", "twostrike_whiff_penalty",
-        "matched_n_2k", "matched_cells",
-        "risp_0out_rv_penalty", "risp_0out_whiff_penalty", "risp_0out_n", "risp_0out_cells",
-        "dp_rv_penalty", "dp_whiff_penalty", "dp_n", "dp_cells",
-        "gamestate_rv_penalty", "gamestate_whiff_penalty", "gamestate_n", "gamestate_cells",
-        "platoon_rv_penalty", "platoon_whiff_penalty", "platoon_n", "platoon_cells",
-        "swing_plus",
-    ]
-    adj = adj.drop(columns=[c for c in stale if c in adj.columns])
-    adj = (adj
-           .merge(two_strike, on=KEY, how="left")
-           .merge(game_state,  on=KEY, how="left")
-           .merge(platoon,     on=KEY, how="left")
-           .merge(swing_plus,  on=KEY, how="left"))
-    adj.to_parquet(DATA / "adjustability.parquet", index=False)
+    models = load_models()
+    run_value_tables = xrv.load_run_value_tables()
+    swings = load_swings()
+    print(f"{len(swings):,} swings, "
+          f"{swings.groupby(KEY, observed=True).ngroups} units")
 
-    for col in ["twostrike_rv_penalty", "gamestate_rv_penalty", "platoon_rv_penalty"]:
-        sub = adj.dropna(subset=[col])
-        print(f"  {col}: n={len(sub)}  mean={sub[col].mean():.4f}  median={sub[col].median():.4f}")
+    if args.verify:
+        worst = verify_scoring(models, run_value_tables, swings)
+        print(f"max |scored - published xrv| = {worst:.3e}")
+        print("PASS" if worst < 1e-5 else "FAIL — pitch_type categories misaligned")
+        return
 
-    # ── Section 2: between-batter OLS ──
-    print("\n=== Section 2: between-batter OLS ===")
-    ols_lines = run_ols(adj)
+    reference = load_policy_reference(swings)
+    scale = reference["shape_sd"]
+    groups = list(swings.groupby(KEY, observed=True, sort=False))
+    if args.limit:
+        groups = groups[:args.limit]
 
-    out = ROOT / "results" / "adjustability_value.md"
-    header = [
-        "# Adjustability value\n",
-        (f"2024-25, ≥{MIN_SWINGS} swings per (batter, stand). "
-         "**Section 1:** matched situational penalties (empirical delta_run_exp). "
-         "Two-strike: within pitch_type × zone. "
-         "Game-state (any runner vs empty) and platoon: within pitch_type × zone × strikes. "
-         "**Section 2:** between-batter OLS with count-neutral swing_plus (xrv_grade_neutral) "
-         "as Swing+ control. "
-         "**Section 3 (DML):** fallback robustness check.\n"),
-    ]
-    out.write_text("\n".join(header + ols_lines), encoding="utf-8")
-    print(f"  Wrote {out}")
+    print(f"pass 1: fitting {len(groups)} unit policies")
+    fitted = [unit_fit(group.reset_index(drop=True), np.asarray(
+        [scale[f] for f in SHAPE], float)) for _, group in groups]
+    blocks = [f["policy"] for f in fitted]
 
-    # ── Section 3: DML (fallback, ~30 min) ──
-    # Commented out by default — run manually when needed.
-    # Known limitation: per-axis treatments (T_count, T_pitch) share variables with the
-    # confounder set, which may inflate r2_T and compress θ. Between-batter OLS (Section 2)
-    # is the headline; DML is a robustness check only.
-    #
-    # To run: uncomment the block below and execute `python src/adjustability_value.py`
-    #
-    # print("\n=== Section 3: swing-level DML (fallback, slow) ===")
-    # print("Loading swings...")
-    # df = load_swings()
-    # print(f"  {len(df):,} swings")
-    # pq = build_pitcher_quality(df)
-    # df = df.merge(pq.reset_index(), on="pitcher_id", how="left")
-    # print("Building swing treatments...")
-    # treats = build_swing_treatments(df, AXES)
-    # validate_treatments(treats)
-    # print("Assembling analysis DataFrame...")
-    # analysis_df, confounder_cols = assemble_analysis_df(df, treats)
-    # print(f"  All swings n={len(analysis_df):,}  |  Two-strike n={analysis_df[analysis_df['strikes']==2].shape[0]:,}")
-    # dml_lines = run_dml(analysis_df, confounder_cols)
-    # with open(out, "a", encoding="utf-8") as f:
-    #     f.write("\n".join(dml_lines))
+    print(f"pass 2: scoring arms ({cf.N_REPLACEMENTS} replacements per unit)")
+    records, curves, gradient_rows = [], [], []
+    for i, fit in enumerate(fitted):
+        record = unit_record(models, run_value_tables, fit, scale, blocks, i)
+        curves.append(record.pop("_alpha_curve"))
+        gradient_rows.extend(record.pop("_prescriptions"))
+        records.append(record)
+        if (i + 1) % 25 == 0:
+            print(f"  {i + 1}/{len(fitted)} units")
+    df = pd.DataFrame(records)
 
-    print(f"\nFinal output: {out}")
+    # Admit only levels of situational modulation major-league hitters actually sustain.
+    # The cap is a quantile of FITTED displacement, so it is tied to the shape design and
+    # must be re-pegged whenever that changes (adding the pitch-characteristic controls
+    # shrank displacements, which would leave an old cap non-binding). `shape_sd` is a raw
+    # league scale and stays frozen across re-pegs.
+    if args.repeg:
+        reference["displacement_cap"] = None
+    if reference["displacement_cap"] is None:
+        reference["displacement_cap"] = float(
+            df["displacement_sd"].quantile(cf.POLICY_QUANTILE))
+    cap = reference["displacement_cap"]
+
+    policy, gain = [], []
+    for d_u, curve in zip(df["displacement_sd"], curves):
+        allowed = {a: v for a, v in curve.items() if a in cf.policy_alphas(d_u, cap)}
+        best = max(allowed, key=allowed.get) if allowed else float("nan")
+        policy.append(best)
+        gain.append(allowed[best] - curve[1.0]
+                    if allowed and 1.0 in curve else float("nan"))
+    df["alpha_star_policy"] = policy
+    df["runs_at_alpha_star"] = gain
+    df["runs_at_alpha_star_per_swing"] = df["runs_at_alpha_star"] * N_SEASONS / df["n_swings"]
+
+    adj = pd.read_parquet(DATA / "adjustability.parquet", columns=KEY + [
+        "label", "adjustability", "adj_count", "adjustability_plus",
+        "adjustability_pctile", "swing_plus",
+        "twostrike_rv_penalty", "gamestate_rv_penalty", "platoon_rv_penalty",
+    ])
+    cards = pd.read_parquet(DATA / "shape_cards.parquet",
+                            columns=KEY + ["role", "archetype_name", "grade"])
+    primary = (cards[cards["role"] == "primary"][KEY + ["archetype_name", "grade"]]
+               .rename(columns={"grade": "primary_grade"}))
+    rep = pd.read_parquet(DATA / "repertoire_scores.parquet",
+                          columns=KEY + ["repertoire_pctile", "effective_shapes"])
+
+    df = (df.merge(adj, on=KEY, how="left")
+            .merge(primary, on=KEY, how="left")
+            .merge(rep, on=KEY, how="left"))
+
+    suffix = "_subset" if args.limit else ""
+    gradients = pd.DataFrame(gradient_rows).merge(df[KEY + ["label"]], on=KEY, how="left")
+    df = df.merge(axis_top_levers(gradients), on=KEY, how="left")
+
+    out = DATA / f"adjustability_value{suffix}.parquet"
+    grad_out = DATA / f"adjustability_gradients{suffix}.parquet"
+    df.to_parquet(out, index=False)
+    gradients.to_parquet(grad_out, index=False)
+    print(f"\nWrote {len(df)} rows -> {out}")
+    print(f"Wrote {len(gradients)} rows -> {grad_out}")
+
+    if not args.limit and (args.repeg or not POLICY_REF.exists()):
+        POLICY_REF.write_text(json.dumps(reference, indent=2) + "\n")
+        print(f"Pegged policy reference -> {POLICY_REF}")
+
+    print("\n=== Season runs vs a replacement hitter's policy ===")
+    for col in ["runs_total", "runs_count", "runs_gamestate", "runs_platoon",
+                "runs_interaction", "runs_total_2k", "runs_vs_desituated"]:
+        s = df[col]
+        print(f"  {col:<20} mean={s.mean():+6.2f}  median={s.median():+6.2f}  "
+              f"sd={s.std():5.2f}  %pos={100 * (s > 0).mean():5.1f}  "
+              f"range=[{s.min():+6.1f}, {s.max():+6.1f}]")
+    print(f"\n  corr(runs_total, n_swings)  = {df['runs_total'].corr(df['n_swings']):+.3f}")
+    print(f"  corr(runs_total, swing_plus) = {df['runs_total'].corr(df['swing_plus']):+.3f}")
+    resid = df["runs_interaction"].abs()
+    print(f"\n  |interaction| mean={resid.mean():.2f}  max={resid.max():.2f}  "
+          f"median % of |total|={100 * (resid / df['runs_total'].abs().clip(lower=0.1)).median():.0f}%")
+
+    print("\n=== Policy ===")
+    print(f"  displacement cap Q{100 * cf.POLICY_QUANTILE:.0f} = {cap:.3f} SD")
+    for col in ["displacement_sd", "alpha_peak_unconstrained", "alpha_star_policy",
+                "runs_at_alpha_star", "runs_at_alpha_star_per_swing"]:
+        s = df[col]
+        print(f"  {col:<28} mean={s.mean():+7.3f}  median={s.median():+7.3f}")
+    print(f"  peak still at a grid edge: {100 * df['alpha_peak_at_boundary'].mean():.0f}% of units")
+    for axis in AXIS_NAMES:
+        print(f"  alpha_star_{axis:<10} median={df[f'alpha_star_{axis}'].median():.2f}  "
+              f"runs range median={df[f'runs_range_{axis}'].median():.3f}")
+
+    print("\n=== Situational gradient (cohort mean |cell - own baseline|, runs/swing per SD) ===")
+    pivot = (gradients.assign(g=gradients["grad_delta_runs_per_sd"].abs())
+             .pivot_table(index="dial", columns="cell", values="g", aggfunc="mean"))
+    print(pivot.round(4).to_string())
+
+    print("\n=== Spot check ===")
+    spot = df[df["label"].str.contains("Judge|Arraez|Schwarber|Teoscar", na=False)]
+    print(spot[["label", "runs_total", "alpha_star_policy", "runs_at_alpha_star"]
+               + [f"top_lever_{a}" for a in AXIS_NAMES]].to_string(index=False))
 
 
 if __name__ == "__main__":

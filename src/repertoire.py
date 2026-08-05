@@ -1,8 +1,9 @@
-""" Swing Repertoire+ — a purely descriptive measure of how EXPANSIVE a hitter's swing
-repertoire is in shape space. Bigger gaps between a unit's cluster centroids (in bat speed
-and the angle features) => a wider repertoire. This is geometry only: it says nothing about
-whether the shapes are good, valuable, or well-deployed — a wide repertoire and a narrow one are
-graded purely on spread.
+"""Measures how many different swings a hitter really has, and how different they are from each
+other. A hitter with two swings that look nothing alike scores like one with four that all look
+the same.
+
+It only measures width. It says nothing about whether those swings are any good or whether he
+uses them in the right spots — that is what Swing+ and the adjustability work are for.
 
 
 Definition (per (batter, stand) unit) — a count-aware functional-diversity measure:

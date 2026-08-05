@@ -1,4 +1,6 @@
-""" Layer 2 — per-hitter swing ID cards.
+"""Writes a scouting card for each of a hitter's swings: what it looks like next to his main one,
+when he goes to it, and what it's worth. One row per swing, so you can read "his B swing is 3 mph
+slower and 5 degrees flatter, he uses it with two strikes, and it costs him nothing."
 
 Turns each per-(batter, stand) cluster from a bare index into a self-describing shape: an archetype
 tag (Layer 1), a name relative to the hitter's own primary swing, the situations it's over-used in,
