@@ -93,23 +93,6 @@ def centered_situation(group):
     return matrix - matrix.mean(axis=0, keepdims=True), axis_rows
 
 
-def fit_policy(centered, displacement):
-    """Least-squares read of a displacement (in league-SD units) on the centered situation.
-
-    Rank-deficient by construction — each column group's dummies sum to a constant — so
-    lstsq's minimum-norm solution is the intended one.
-    """
-    policy, *_ = np.linalg.lstsq(centered, displacement, rcond=None)
-    return policy
-
-
-def swap_axis(own_policy, repl_policy, axis_rows, axis):
-    """Own policy with one axis's rows replaced by the replacement's."""
-    out = own_policy.copy()
-    out[axis_rows[axis]] = repl_policy[axis_rows[axis]]
-    return out
-
-
 def desituate(X, axis_slices, axes_off):
     """Copy of X with the named axes' dummy columns flattened to their column means."""
     out = X.copy()
@@ -182,11 +165,6 @@ def axis_blend(shape_actual, shape_axis, shape_cf, alpha):
     (shape_axis - shape_cf) sum exactly to (shape_actual - shape_cf).
     """
     return shape_actual + (alpha - 1.0) * (shape_axis - shape_cf)
-
-
-def mean_displacement(shape_actual, shape_cf, scale):
-    """Unit-level D_u: mean Euclidean norm of per-swing situational displacement, in SD units."""
-    return float(np.linalg.norm((shape_actual - shape_cf) / scale, axis=1).mean())
 
 
 def policy_alphas(d_u, cap, grid=ALPHA_GRID):

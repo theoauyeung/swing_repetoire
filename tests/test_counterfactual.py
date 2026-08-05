@@ -136,13 +136,6 @@ def test_axis_blend_moves_only_its_own_axis():
     assert np.allclose(cf.axis_blend(actual, axis, base, 2.0), [[12.0, 24.0]])
 
 
-def test_mean_displacement_is_in_scale_units():
-    base = np.zeros((4, 2))
-    actual = np.array([[3.0, 4.0]] * 4)
-    assert cf.mean_displacement(actual, base, np.array([1.0, 1.0])) == pytest.approx(5.0)
-    assert cf.mean_displacement(actual, base, np.array([3.0, 4.0])) == pytest.approx(np.sqrt(2))
-
-
 def test_policy_alphas_caps_scaled_displacement():
     ok = cf.policy_alphas(0.4, 0.6, grid=[0.0, 0.5, 1.0, 1.5, 2.0])
     assert ok == [0.0, 0.5, 1.0, 1.5]  # 1.5 * 0.4 = 0.6 exactly, admitted

@@ -97,12 +97,6 @@ def score_shapes(models, run_value_tables, group, shape_matrix):
     return xrv.assemble_xrv(enriched, prob_bip, prob_foul, value_bip, run_value_tables)
 
 
-def _score_displacement(models, run_value_tables, group, shape_cf, displacement_sd, scale_vector):
-    """xRV per swing when a displacement in league-SD units is added to the de-situated shape."""
-    shifted_shape = shape_cf + displacement_sd * scale_vector
-    return score_shapes(models, run_value_tables, group, shifted_shape)
-
-
 def _season_runs(models, run_value_tables, group, shape_matrix, baseline_xrv):
     """Season runs `shape_matrix` gains over an already-scored baseline, on the same pitches."""
     scored = score_shapes(models, run_value_tables, group, shape_matrix)
@@ -235,11 +229,14 @@ def unit_fit(group, scale, shuffle_seed=None):
     shape_cf = cf.predict_oof(design_cf, fits, len(SHAPE))
     centered, axis_rows = cf.centered_situation(group)
     displacement = (shape_actual - shape_cf) / scale
+    # Rank-deficient by construction — each column group's dummies sum to a constant — so
+    # lstsq's minimum-norm solution is the intended one.
+    policy, *_ = np.linalg.lstsq(centered, displacement, rcond=None)
     return {
         "group": group, "design": design, "axis_slices": axis_slices, "fits": fits,
         "observed": observed, "shape_actual": shape_actual, "shape_cf": shape_cf,
         "displacement": displacement, "centered": centered, "axis_rows": axis_rows,
-        "policy": cf.fit_policy(centered, displacement),
+        "policy": policy,
     }
 
 
@@ -283,15 +280,22 @@ def unit_record(models, run_value_tables, fit, scale, blocks=None, index=None,
         n_draws = min(n_replacements, len(blocks) - 1)
         replacement_indices = rng.choice(other_units, size=n_draws, replace=False)
 
+        axis_rows = fit["axis_rows"]
         replacement_xrv = np.zeros(len(group))
         replacement_xrv_by_axis = {axis: np.zeros(len(group)) for axis in AXIS_NAMES}
         for j in replacement_indices:
-            replacement_xrv += _score_displacement(
-                models, run_value_tables, group, shape_cf, centered @ blocks[j], scale_vector)
+            # A policy block returns a displacement in league-SD units, so rescale it back
+            # to raw dial units before adding it to the de-situated shape.
+            replacement_xrv += score_shapes(
+                models, run_value_tables, group,
+                shape_cf + (centered @ blocks[j]) * scale_vector)
             for axis in AXIS_NAMES:
-                swapped = cf.swap_axis(fit["policy"], blocks[j], fit["axis_rows"], axis)
-                replacement_xrv_by_axis[axis] += _score_displacement(
-                    models, run_value_tables, group, shape_cf, centered @ swapped, scale_vector)
+                # His own policy with only this axis's rows taken from the replacement.
+                swapped = fit["policy"].copy()
+                swapped[axis_rows[axis]] = blocks[j][axis_rows[axis]]
+                replacement_xrv_by_axis[axis] += score_shapes(
+                    models, run_value_tables, group,
+                    shape_cf + (centered @ swapped) * scale_vector)
 
         n_picks = len(replacement_indices)
         per_swing_delta = xrv_actual - replacement_xrv / n_picks
