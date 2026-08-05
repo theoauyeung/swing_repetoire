@@ -8,6 +8,7 @@ collapse, runs_total is a model artifact and no leaderboard ships from it.
 
 Run: python src/adjustability_value_validate.py
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -69,37 +70,107 @@ def predictive(df):
 
 
 MIN_SEASON_SWINGS = 150
+# Everything the prescription rests on. runs_total is the accounting headline; the rest are
+# the policy layer, whose reliability the design pre-commits to before publication.
+RELIABILITY_COLS = [
+    "runs_total", "runs_per_swing", "marginal_runs_per_alpha", "displacement_sd",
+    "alpha_peak_unconstrained", "alpha_star_policy", "runs_at_alpha_star_per_swing",
+]
+GRADIENT_CELL = ("count", "2 strikes")
+
+
+def _season_half(op, cf, models, run_value_tables, half, scale):
+    """Full re-estimation inside one season: records, plus that season's own policy cap.
+
+    The cap is recomputed from this half's own displacement distribution rather than
+    borrowed from the pooled run — otherwise the two halves would share an input and the
+    correlation would be inflated.
+    """
+    records, curves = [], []
+    for _, group in half.groupby(KEY, observed=True, sort=False):
+        record = op.unit_record(models, run_value_tables, group.reset_index(drop=True),
+                                scale=scale)
+        curves.append(record.pop("_alpha_curve"))
+        for row in record.pop("_prescriptions"):
+            if (row["axis"], row["cell"]) == GRADIENT_CELL:
+                record[f"grad2k_{row['dial']}"] = row["grad_delta_runs_per_sd"]
+        records.append(record)
+
+    df = pd.DataFrame(records)
+    cap = float(df["displacement_sd"].quantile(cf.POLICY_QUANTILE))
+    policy, gain = [], []
+    for d_u, curve in zip(df["displacement_sd"], curves):
+        allowed = {a: v for a, v in curve.items() if a in cf.policy_alphas(d_u, cap)}
+        best = max(allowed, key=allowed.get) if allowed else float("nan")
+        policy.append(best)
+        gain.append(allowed[best] - curve[1.0] if allowed and 1.0 in curve else float("nan"))
+    df["alpha_star_policy"] = policy
+    df["runs_at_alpha_star_per_swing"] = np.asarray(gain) * len(SEASONS) / df["n_swings"]
+    return df
 
 
 def reliability(min_season_swings=MIN_SEASON_SWINGS):
-    """2024 vs 2025 split-half correlation of runs_total.
+    """2024 vs 2025 split-half for every quantity the prescription rests on.
 
     The whole pipeline is re-run independently inside 2024 and inside 2025, so the two halves
-    share no coefficients and no folds. Passing bar from the spec: r comparable to
-    `adjustability`'s 0.67.
+    share no coefficients, no folds and no policy cap. Passing bar from the spec: r comparable
+    to `adjustability`'s 0.67, and a pre-committed r = 0.5 floor below which
+    `alpha_star_policy` does not ship as a per-batter recommendation.
 
-    unit_record divides by N_SEASONS, which is a constant factor here and therefore
-    leaves the correlation unchanged; no rescaling is needed.
+    unit_record divides by N_SEASONS, a constant factor here, so correlations are unaffected.
     """
     import adjustability_value as op
+    import counterfactual as cf
 
     models = op.load_models()
     run_value_tables = op.xrv.load_run_value_tables()
     swings = op.load_swings()
+    scale = op.load_policy_reference(swings)["shape_sd"]
 
+    halves = {}
+    for season in SEASONS:
+        half = swings[swings["game_year"] == season]
+        sizes = half.groupby(KEY, observed=True)[op.SHAPE[0]].transform("size")
+        half = half[sizes >= min_season_swings]
+        halves[season] = _season_half(op, cf, models, run_value_tables, half, scale)
+        print(f"  {season}: {len(halves[season])} units")
+
+    return halves[SEASONS[0]].merge(halves[SEASONS[1]], on=KEY, suffixes=("_a", "_b"))
+
+
+def reliability_table(rel):
+    """Split-half r per quantity, weakest-first so the gate is impossible to skim past."""
+    dials = sorted(c[len("grad2k_"):-len("_a")] for c in rel.columns
+                   if c.startswith("grad2k_") and c.endswith("_a"))
+    cols = RELIABILITY_COLS + [f"grad2k_{d}" for d in dials]
+    rows = [{"quantity": c, "r": round(float(rel[f"{c}_a"].corr(rel[f"{c}_b"])), 3)}
+            for c in cols if f"{c}_a" in rel.columns]
+    return pd.DataFrame(rows).sort_values("r").reset_index(drop=True)
+
+
+def gradient_summary():
+    """Per-axis size of the prescriptive signal, and which dial it lands on.
+
+    Reported for all three axes even where the signal is small: a near-zero situational
+    gradient on gamestate is itself the finding, not a reason to drop the axis.
+    """
+    grad = pd.read_parquet(DATA / "adjustability_gradients.parquet")
     rows = []
-    for key, group in swings.groupby(KEY, observed=True, sort=False):
-        halves = {}
-        for season in SEASONS:
-            half = group[group["game_year"] == season]
-            if len(half) >= min_season_swings:
-                halves[season] = op.unit_record(models, run_value_tables,
-                                                half.reset_index(drop=True),
-                                                headline_only=True)["runs_total"]
-        if len(halves) == len(SEASONS):
-            rows.append({"batter_id": key[0], "batter_stand": key[1],
-                         **{f"runs_{s}": v for s, v in halves.items()}})
-
+    for axis, block in grad.groupby("axis"):
+        best = block.loc[block.groupby(KEY)["situational_runs_per_quarter_sd"]
+                         .apply(lambda s: s.abs().idxmax())]
+        rows.append({
+            "axis": axis,
+            "units": int(block[KEY].drop_duplicates().shape[0]),
+            "cells": int(block["cell"].nunique()),
+            # No pipes in these names: the notebook parses this table straight out of the
+            # markdown report, and a literal | inside a header cell splits the row.
+            "median_abs_grad_delta": round(
+                float(block["grad_delta_runs_per_sd"].abs().median()), 4),
+            "median_abs_runs_at_quarter_sd": round(
+                float(best["situational_runs_per_quarter_sd"].abs().median()), 3),
+            "most_common_lever": best["dial"].mode().iloc[0],
+        })
     return pd.DataFrame(rows)
 
 
@@ -115,26 +186,37 @@ def placebo(n_units=60, seed=11):
     real, fake = [], []
     for i, (_, group) in enumerate(groups):
         group = group.reset_index(drop=True)
-        real.append(op.unit_record(models, run_value_tables, group)["runs_total"])
-        fake.append(op.unit_record(models, run_value_tables, group,
+        real.append(op.unit_record(models, run_value_tables, group,
+                                   headline_only=True)["runs_total"])
+        fake.append(op.unit_record(models, run_value_tables, group, headline_only=True,
                                    shuffle_seed=seed + i)["runs_total"])
     return pd.DataFrame({"real": real, "placebo": fake})
 
 
-def main():
+def main(reuse=False):
     df = pd.read_parquet(DATA / "adjustability_value.parquet").merge(
         season_outcomes(), on=KEY, how="left")
 
     conv, pred = convergent(df), predictive(df)
+    grad_summary = gradient_summary()
     print(conv.to_string(index=False))
     print()
     print(pred.to_string(index=False))
+    print()
+    print(grad_summary.to_string(index=False))
 
-    print("\nRunning 2024 vs 2025 split-half (~8 min)...")
-    rel = reliability()
-    split_r = float(rel[f"runs_{SEASONS[0]}"].corr(rel[f"runs_{SEASONS[1]}"]))
-    print(f"  n = {len(rel)} units with >= {MIN_SEASON_SWINGS} swings in both seasons, "
-          f"r = {split_r:.3f}")
+    cache = DATA / "adjustability_value_reliability.parquet"
+    if reuse and cache.exists():
+        rel = pd.read_parquet(cache)
+        print(f"\nReusing cached split-half from {cache}")
+    else:
+        print("\nRunning 2024 vs 2025 split-half (~20 min)...")
+        rel = reliability()
+        rel.to_parquet(cache, index=False)
+    rel_table = reliability_table(rel)
+    policy_r = float(rel_table.loc[rel_table["quantity"] == "alpha_star_policy", "r"].iloc[0])
+    print(f"  n = {len(rel)} units with >= {MIN_SEASON_SWINGS} swings in both seasons")
+    print(rel_table.to_string(index=False))
 
     print("\nRunning placebo (60 units, ~6 min)...")
     plac = placebo()
@@ -167,6 +249,25 @@ def main():
             "`runs_total` as an accounting decomposition with internal validity, not as a "
             "validated predictor of run production.\n")
 
+    # The policy layer is gated separately from the accounting headline: they can pass and fail
+    # independently, and collapsing them to one label would hide which of the two ships.
+    below = rel_table[rel_table["r"] < 0.5]
+    above = rel_table[rel_table["r"] >= 0.5]
+    fmt = lambda t: ", ".join(f"`{q}` (r = {r:.3f})"  # noqa: E731
+                              for q, r in zip(t["quantity"], t["r"]))
+    verdict += (
+        "\n**Policy layer: split.** The alpha scan and the per-dial gradients do not stand or "
+        "fall together. Below the pre-committed 0.5 reliability floor: "
+        f"{fmt(below)}. At or above it: {fmt(above)}. "
+        f"`alpha_star_policy` at r = {policy_r:.3f} is "
+        + ("above the floor and ships per batter. "
+           if policy_r >= 0.5 else
+           "the weakest quantity in the build — how much to modulate is not a per-batter "
+           "recommendation, only a cohort-level statement. ")
+        + f"The most repeatable quantity in the build is `{rel_table['quantity'].iloc[-1]}` "
+        f"(r = {rel_table['r'].iloc[-1]:.3f}). Read *which lever* and *how much* against their "
+        "own rows above rather than against a single label for the layer.\n")
+
     lines = [
         "# Counterfactual adjustment value — validation\n",
         (f"2024-25, {len(df)} units. `runs_total` = season runs from situational swing "
@@ -191,20 +292,50 @@ def main():
         pred.to_markdown(index=False),
         "",
         "## Reliability\n",
-        ("`runs_total` estimated independently within 2024 and within 2025 — separate "
-         "regressions, separate folds, no shared coefficients — then correlated across "
-         f"the {len(rel)} units with at least {MIN_SEASON_SWINGS} swings in both seasons. "
-         f"The comparison bar is `adjustability`'s year-over-year r = 0.67.\n"),
-        f"- split-half r = **{split_r:.3f}**\n",
+        ("Every quantity re-estimated independently within 2024 and within 2025 — separate "
+         "regressions, separate folds, separate policy caps, no shared coefficients — then "
+         f"correlated across the {len(rel)} units with at least {MIN_SEASON_SWINGS} swings in "
+         "both seasons. The comparison bar is `adjustability`'s year-over-year r = 0.67, and "
+         "the design pre-commits to an r = 0.5 floor for `alpha_star_policy`. `grad2k_*` are "
+         "the two-strike situational gradients, the per-dial prescriptive layer.\n"),
+        rel_table.to_markdown(index=False),
         "",
-        "## Support constraint\n",
-        f"- `alpha_at_boundary`: {100 * df['alpha_at_boundary'].mean():.0f}% of units\n",
-        f"- median `alpha_star_supported`: {df['alpha_star_supported'].median():.2f}\n",
+        (f"`alpha_star_policy` splits at r = {policy_r:.3f}, "
+         + ("clearing" if policy_r >= 0.5 else "**below**")
+         + " the pre-committed 0.5 floor, so it "
+         + ("ships as a per-batter recommendation.\n" if policy_r >= 0.5 else
+            "ships as a cohort-level statement only and the per-batter column is documented "
+            "as unreliable.\n")),
+        "",
+        "## Policy layer\n",
+        (f"- median `alpha_peak_unconstrained`: {df['alpha_peak_unconstrained'].median():.2f} "
+         f"({100 * df['alpha_peak_at_boundary'].mean():.0f}% of units still at a grid edge). "
+         "Diagnostic of curvature, explicitly extrapolative, never a recommendation.\n"),
+        (f"- median `alpha_star_policy`: {df['alpha_star_policy'].median():.2f}; "
+         f"{int((df['alpha_star_policy'] < 1).sum())} units told to modulate less, "
+         f"{int((df['alpha_star_policy'] == 1).sum())} to hold, "
+         f"{int((df['alpha_star_policy'] > 1).sum())} to modulate more. "
+         f"corr with `adj_count` = {df['alpha_star_policy'].corr(df['adj_count']):+.2f} — the "
+         "league cap correctly leaves room for low modulators and none for high ones.\n"),
+        (f"- mean `runs_at_alpha_star`: {df['runs_at_alpha_star'].mean():+.2f} runs, itself a "
+         f"counting stat (corr with `n_swings` = "
+         f"{df['runs_at_alpha_star'].corr(df['n_swings']):+.2f}); use "
+         "`runs_at_alpha_star_per_swing` for cross-hitter comparison.\n"),
         f"- mean `marginal_runs_per_alpha`: {df['marginal_runs_per_alpha'].mean():+.2f} runs "
         f"(counting stat: corr with `n_swings` = "
         f"{df['marginal_runs_per_alpha'].corr(df['n_swings']):+.2f}, with `runs_total` = "
         f"{df['marginal_runs_per_alpha'].corr(df['runs_total']):+.2f}; no per-swing version "
         f"exists, so cross-hitter comparison on it is substantially playing time)\n",
+        "",
+        "## Per-dial prescriptions\n",
+        ("`grad_delta_runs_per_sd` is what a +1 SD move on a dial buys in a situation cell, net "
+         "of the hitter's own all-swing gradient — the raw cell gradient is dominated by his "
+         "baseline, so only the delta is situational. `situational_runs_per_quarter_sd` scales "
+         "that to a realistic +0.25 SD move over the cell's own season swings. Deltas are "
+         "n-weighted contrasts within an axis and sum to zero across its cells, so they are "
+         "read per cell and never summed to a season total. All three axes are reported "
+         "regardless of signal size.\n"),
+        grad_summary.to_markdown(index=False),
         "",
         "## Placebo\n",
         ("Situation labels shuffled within unit, preserving marginals and destroying any "
@@ -222,4 +353,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reuse", action="store_true",
+                        help="reuse the cached split-half instead of the ~20 min recompute")
+    main(**vars(parser.parse_args()))

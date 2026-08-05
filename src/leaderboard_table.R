@@ -240,7 +240,7 @@ pol_raw <- read_parquet("data/adjustability_value.parquet",
                         col_select = c("batter_id", "label", "batter_stand",
                                        "runs_total", "runs_count",
                                        "runs_gamestate", "runs_platoon",
-                                       "marginal_runs_per_alpha",
+                                       "top_lever_count",
                                        "adjustability_plus", "swing_plus")) |>
   filter(!is.na(runs_total)) |>
   mutate(
@@ -248,7 +248,16 @@ pol_raw <- read_parquet("data/adjustability_value.parquet",
     RunsCount   = round(runs_count, 1),
     RunsGS      = round(runs_gamestate, 1),
     RunsPlatoon = round(runs_platoon, 1),
-    Marginal    = round(marginal_runs_per_alpha, 1),
+    # top_lever_count is "<cell>/<dial>"; abbreviate both halves so it fits a table column.
+    Lever       = top_lever_count |>
+      sub(pattern = "^0 strikes/", replacement = "0K ") |>
+      sub(pattern = "^1 strike/",  replacement = "1K ") |>
+      sub(pattern = "^2 strikes/", replacement = "2K ") |>
+      sub(pattern = "horz_attack_angle_pull", replacement = "HAA", fixed = TRUE) |>
+      sub(pattern = "vert_attack_angle", replacement = "VAA", fixed = TRUE) |>
+      sub(pattern = "swing_path_tilt", replacement = "tilt", fixed = TRUE) |>
+      sub(pattern = "swing_length", replacement = "length", fixed = TRUE) |>
+      sub(pattern = "bat_speed", replacement = "speed", fixed = TRUE),
     Adj         = round(adjustability_plus, 1),
     Swing       = round(swing_plus, 1)
   ) |>
@@ -259,19 +268,20 @@ n_pol    <- nrow(pol_raw)
 pal_pol  <- col_numeric(PAL_COLS, domain = range(pol_raw$Runs, na.rm = TRUE))
 
 pol_cols   <- c("Rank", "batter_id", "label", "batter_stand",
-                "Runs", "RunsCount", "RunsGS", "RunsPlatoon", "Marginal", "Adj", "Swing")
+                "Runs", "RunsCount", "RunsGS", "RunsPlatoon", "Lever", "Adj", "Swing")
 pol_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = "R/L",
                    Runs = "Total Runs", RunsCount = "Count",
                    RunsGS = "Game St", RunsPlatoon = "Platoon",
-                   Marginal = "Marginal", Adj = "Adj+", Swing = "Swing+")
+                   Lever = "Count Lever", Adj = "Adj+", Swing = "Swing+")
 pol_align  <- c("Rank", "batter_stand", "Runs", "RunsCount", "RunsGS", "RunsPlatoon",
-                "Marginal", "Adj", "Swing")
+                "Lever", "Adj", "Swing")
 pol_foot   <- paste0(
   "Season runs from situational swing changes vs a de-situated counterfactual: the swing ",
   "the hitter would have made on the same pitch with count, base state and matchup held at ",
   "his own mean. Priced by xRV at the real count. Pitch type is a control, never ",
-  "de-situated. 2024-25, min 400 swings. Marginal = runs per unit of extra situational ",
-  "responsiveness at current behavior. ",
+  "de-situated. 2024-25, min 400 swings. Count Lever = the most situational dial in the ",
+  "count axis and the strike count it applies to, from the per-dial gradients: the dial whose ",
+  "payoff in that cell departs most from the hitter's own baseline. ",
   "Platoon is near zero for switch-hitter units, which face almost no same-hand pitching ",
   "within a stance.")
 

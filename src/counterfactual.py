@@ -24,9 +24,17 @@ CONTROL_COLS = ["pitch_group"]
 
 N_FOLDS = 5
 SEED = 7
-ALPHA_GRID = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+# Fine near alpha=1, where any realistic prescription lives; coarse past 3.0, where the
+# only job is to locate the turn. The old grid stopped at 2.0, below the peak, which is
+# why 86% of units pegged at its ceiling and alpha* was a grid artifact.
+ALPHA_GRID = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0]
+AXIS_ALPHA_GRID = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
 ENVELOPE_LO, ENVELOPE_HI = 1.0, 99.0
 MAX_OUTSIDE = 0.05
+POLICY_QUANTILE = 0.90
+GRAD_STEP_SD = 0.1
+POLICY_STEP_SD = 0.25
+MIN_CELL_SWINGS = 25
 
 
 def build_design(group, location_matrix):
@@ -110,3 +118,48 @@ def admissible_alphas(shape_cf, shape_actual, env, grid=ALPHA_GRID, max_outside=
     envelope."""
     return [a for a in grid
             if fraction_outside(blend(shape_cf, shape_actual, a), env) < max_outside]
+
+
+def axis_blend(shape_actual, shape_axis, shape_cf, alpha):
+    """Shape with one axis at intensity alpha and the other axes left at observed intensity.
+
+    Exact, with no extra regression: desituating an axis is a linear operation on the
+    design and the prediction is linear in it, so the per-axis contributions
+    (shape_axis - shape_cf) sum exactly to (shape_actual - shape_cf).
+    """
+    return shape_actual + (alpha - 1.0) * (shape_axis - shape_cf)
+
+
+def mean_displacement(shape_actual, shape_cf, scale):
+    """Unit-level D_u: mean Euclidean norm of per-swing situational displacement, in SD units."""
+    return float(np.linalg.norm((shape_actual - shape_cf) / scale, axis=1).mean())
+
+
+def policy_alphas(d_u, cap, grid=ALPHA_GRID):
+    """Alphas whose scaled displacement stays inside the league-referenced cap.
+
+    Asks whether the proposed level of situational modulation is one major-league hitters
+    actually sustain. Non-circular: the reference is the cohort, not this hitter's own
+    fitted range, which would degenerate to alpha <= 1.
+    """
+    if not np.isfinite(d_u) or d_u <= 0:
+        return list(grid)
+    # The cap is a quantile OF the d_u values, so the unit defining it lands exactly on the
+    # boundary at alpha=1 and must not be rejected by float error.
+    return [a for a in grid if a * d_u <= cap * (1 + 1e-9)]
+
+
+def cell_labels(group):
+    """Interpretable situation cells for the prescriptive layer, one label array per axis.
+
+    Coarser than the axes the de-situation uses: prescriptions are read per cell, and the
+    full balls x strikes x base x outs cross is too thin to estimate a per-cell gradient.
+    """
+    strikes = group["strikes"].to_numpy()
+    same_hand = group["pitcher_throws"].to_numpy() == group["batter_stand"].to_numpy()
+    return {
+        "count": np.where(strikes >= 2, "2 strikes",
+                          np.where(strikes == 1, "1 strike", "0 strikes")),
+        "gamestate": group["base_state"].to_numpy().astype(str),
+        "platoon": np.where(same_hand, "same-hand", "opp-hand"),
+    }
