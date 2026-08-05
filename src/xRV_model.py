@@ -2,31 +2,6 @@
 either puts the ball in play, fouls it off, or misses it; three models predict which of those
 happens, and a run-value table turns those odds into runs.
 
-Conditioned on a competitive swing, the pitch either goes into play, is fouled, or is missed.
-Three XGBoost models estimate that outcome tree; a run-value layer (from the count/linear-weight
-CSVs) turns the outcome probabilities into an expected run value:
-
-    xRV(swing) =  P(BIP)        * ( V_bip - ERV(b,s) )                        # ball in play
-               + (1 - P(BIP)) * [  P(foul | not BIP) * rv_foul(b,s)           # foul
-                                 + (1 - P(foul | not BIP)) * rv_whiff(b,s) ]  # whiff
-
-Models (all conditioned on the SAME pre-swing predictors: pitch/situation context + the 5 swing
-shape features; NO post-contact mediators -- exit velo / launch angle excluded per design):
-  p_bip  : P(ball in play | swing)                        -- XGBClassifier
-  p_foul : P(foul | swing, not in play)                   -- XGBClassifier  (whiff = 1 - p_foul)
-  v_bip  : E[linear-weight run value of the batted ball]  -- XGBRegressor    ("xwOBACON" piece)
-
-Run-value layer (RE24-style delta = value of resulting state - value of the count you left), both
-sides in the AVERAGE-PA-centered frame (avg PA ~= 0) so they are directly comparable:
-  ERV(b,s)      count run expectancy            (count_values.csv)
-  lw(outcome)   linear_weights.csv `lw_raw`      (avg-PA-centered; an out in play is ~ -0.25, not 0)
-  rv_whiff(b,s) = ERV(b,s+1) - ERV(b,s)  for s<2 ;  lw_K - ERV(b,2)  at 2 strikes (K)
-  rv_foul(b,s)  = ERV(b,s+1) - ERV(b,s)  for s<2 ;  0                at 2 strikes
-
-Hyperparameters are FIXED (selected by experiments/sweep.py on a 2024-train / 2025-val split); this
-script does no tuning -- it trains on 2024-25, holds out 2026, assembles xRV, and validates the
-run-value tables against delta_run_exp.
-
 Input:  data/swings_model.parquet, data/{count_values,count_transitions,linear_weights}.csv
 Output: data/xrv_models/{p_bip,p_foul,v_bip}.json, data/xrv_swings.parquet, data/xrv_report.md
 

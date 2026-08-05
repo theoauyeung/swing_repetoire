@@ -3,17 +3,6 @@ hard spots (two strikes, runners on, a same-handed arm) versus matched easy spot
 pitch type in the same part of the zone. Then asks whether the hitters who move their swing
 most are the ones who give back least.
 
-Superseded as the headline by the counterfactual build, but still live upstream: it produces
-the penalty columns everything downstream is validated against.
-
-Three situational penalties (each vs empty-base reference within matched cells):
-  twostrike_rv_penalty : 2-strike vs 0-1 strike            within (pitch_type × zone)
-  gamestate_rv_penalty : any runner vs empty bases          within (pitch_type × zone × strikes)
-  platoon_rv_penalty   : same-hand vs opp-hand matchup     within (pitch_type × zone × strikes)
-
-Each penalty is then regressed on its corresponding adjustment axis (+ swing_plus and
-repertoire_pctile as controls) in a between-batter OLS with clustered SE.
-
 Output: data/adjustability.parquet (updated), results/adjustability_value_first_draft.md
 Run   : python src/adjustability_value_first_draft.py
 """

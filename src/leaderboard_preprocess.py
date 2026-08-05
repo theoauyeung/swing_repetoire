@@ -2,10 +2,6 @@
 read them. R chokes trying to open the full files on this machine, so all the counting happens
 here in Python first.
 
-Arrow's read_parquet hangs on macOS (errno 89) when multiple large files are open
-simultaneously. This script does all the heavy lifting in Python/DuckDB and writes
-four small (< 200 KB) parquets that R reads without touching the large files.
-
 Run:  python src/leaderboard_preprocess.py
       (or called by the notebook REGEN cell before launching R)
 """

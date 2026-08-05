@@ -2,30 +2,6 @@
 number. The clustering step only knows "this hitter's cluster 1", which means nothing across
 hitters; this puts all of them on one shared vocabulary.
 
-Per-(batter, stand) clusters are strictly non-comparable (cluster.py); "Cluster 1" is a bare
-index. This builds a cross-unit *vocabulary* so every unit-cluster inherits a human-readable
-archetype tag ("Uppercut Pull", "Flat Oppo") without making clusters the unit of cross-hitter
-comparison. Design sanction: research-design.md Limitation #6 — a post-hoc global reference
-embedding may *label* clusters, it does not merge them.
-
-Method:
-  - recompute each unit-cluster centroid in the 5-feature *pull frame* (handedness-mirrored
-    horz_attack_angle) from cluster_assignments + swings_model, so a lefty's pull swing and a
-    righty's pull swing land in the same archetype. (cluster_summary stores the raw, unmirrored
-    horz angle, which would put L/R pull swings on opposite sides — hence the recompute.)
-  - define archetypes on the 4 pure-geometry features only (tilt, length, VAA, HAA_pull);
-    bat_speed is reported as a per-archetype descriptor, NOT a defining axis (it is state-not-trait
-    cross-batter, ICC 0.126, and including it collapses the geometry grid into an effort bin),
-  - league-standardize the 1,592-centroid pool (z-score each feature across shapes, unweighted:
-    each shape is one observation so rare protective shapes get equal say in the vocabulary),
-  - fit a full-cov GMM at K_ARCH=3 — Level Oppo / Level Center / Uppercut Pull, the honest carve of
-    the level-oppo <-> uppercut-pull diagonal (uppercut swings are pull-side). On the MERGE_SEP=1.75
-    pool the raw BIC minimum is 2, so K=3 is a deliberate interpretability override (kept for the
-    useful middle band; see K_ARCH note). The two level components separate on horz attack, so the
-    OPPO naming boundary is tuned to -6.5 to name them apart,
-  - name each archetype algorithmically from its centroid (vertical x direction), so names are
-    reproducible regardless of GMM component ordering, and assert they come out unique.
-
 Input:  data/cluster_assignments.parquet, data/swings_model.parquet, data/cluster_summary.parquet
 Outputs:
   data/shape_archetypes.parquet   one row per (batter, stand, cluster): archetype id/name,

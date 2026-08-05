@@ -2,35 +2,7 @@
 he saw, we swap in the way a randomly picked other hitter would have adjusted, re-grade both
 swings, and add up the difference over a season.
 
-That comparison is the whole point. Grading him against "not adjusting at all" made 96% of the
-league look good at it, which is a benchmark problem, not a finding. Grading him against
-another real hitter puts about half the league on each side.
-
-For every swing we ask what this hitter's swing would have looked like on this exact
-pitch under a DIFFERENT situational policy, and price both through xRV.
-
     runs_total = sum over swings of [ xRV(his adjustment) - xRV(a replacement hitter's) ]
-
-The benchmark is another randomly drawn hitter's situation->shape policy applied to his
-situations, averaged over N_REPLACEMENTS draws. "Replacement" here means a randomly drawn
-big-leaguer from this same cohort, NOT WAR's replacement-level talent — the bar is an
-average major-league adjuster, not a fringe one. The earlier benchmark was his own de-situated
-swing — "adjusting vs not adjusting at all" — which can only point one way whenever the
-adjustment tracks the pitch: 93.4% of units scored positive, the ranking correlated
-+0.63 with playing time, and elite hitters sat near the bottom. That quantity survives as
-the diagnostic `runs_vs_desituated`; it is an accounting decomposition, not a skill
-measure. A replacement is precision-matched — his policy block carries the same estimation
-noise as the hitter's own — so roughly half the cohort scores negative by construction.
-
-Pitch characteristics (velocity, movement, spin, release) are controls in the shape
-regression alongside location and pitch_group. Without them the situation dummies absorb
-the pitch mix that comes with the count and the swing's mechanical reaction to it is
-scored as volition.
-
-On top of that accounting sit two prescriptive layers. The alpha scan asks HOW MUCH to
-modulate, capped at the level a 90th-percentile league modulator sustains. The per-dial
-gradient asks WHICH LEVER: for each situation cell it reports what a +1 SD move on each
-shape dial is worth, beside how far the hitter already moves it there.
 
 Output: data/adjustability_value.parquet     (unit level)
         data/adjustability_gradients.parquet (unit x axis x cell x dial)

@@ -2,11 +2,6 @@
 attached where they exist. This is the raw material for everything else — nothing here filters
 or judges, it just gets the pitches out of the warehouse and onto disk.
 
-Pulls the superset of *all* swings (is_swing=1), not just bat-tracked ones, so the
-missingness audit can compare tracked vs untracked. Bat-tracking columns are null where
-the swing was not tracked; `has_bat_tracking` flags the tracked subset.
-
-Joins pbp_raw + pbp_descriptions (1:1 on play_id) + players (batter anthropometry).
 Writes: data/swings_2024_2026_mlb.parquet, data/sample_1000.csv, data/profile.md
 
 Run:  python src/extract.py

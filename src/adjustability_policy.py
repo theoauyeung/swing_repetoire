@@ -3,33 +3,6 @@ it with two strikes, aim more up the middle against a same-handed arm. Every sug
 re-graded through the run-value model and thrown out unless he has already shown he can make
 that swing.
 
-`adjustability_value.py` prices the policy a hitter already has. This asks what he should
-do instead.
-
-The search is over MEAN-PRESERVING contrasts. A candidate policy moves one dial by
-`step * v_cell`, where the contrast `v` is n-weighted to sum to zero across an axis's
-cells. The hitter's average swing is therefore unchanged and only its ALLOCATION across
-situations moves — which is what makes this advice about adjustment rather than about
-level. Searching cells independently instead recovers "swing harder in every cell", a
-statement about talent that no amount of situational framing rescues.
-
-Candidate directions are each single dial on its own (the sayable prescription — "give up
-bat speed with two strikes and take it back early") plus the situational gradient
-direction as a ceiling. Candidate steps are a small signed grid in league-SD units. Every
-candidate is priced by RE-SCORING all of the hitter's swings under the shifted policy, not
-by extrapolating the gradient, so curvature is handled.
-
-Two feasibility rails, because an unconstrained optimum is worthless advice:
-
-  1. REPERTOIRE. The prescribed cell-mean shape must sit within MAX_CENTROID_SD of one of
-     the hitter's own GMM cluster centroids — a swing he has demonstrably produced. This is
-     what stops the search prescribing a swing that is merely good in the xRV model.
-  2. ENVELOPE. The shifted per-swing shapes must stay inside his observed 1st-99th
-     percentile range, so xRV is never asked to extrapolate.
-
-The status quo is always in the candidate set, so `runs_gain` is non-negative and reads as
-"runs left on the table in this situation".
-
 Input : data/adjustability_gradients.parquet (cell gradients, from adjustability_value.py)
 Output: data/adjustability_prescriptions.parquet (unit x axis x cell)
 Run   : python src/adjustability_policy.py [--limit N]

@@ -2,23 +2,6 @@
 by their measured shape shows most hitters have two or three they actually repeat, and this is
 what separates them.
 
-Clustering unit = (batter_id, batter_stand). A switch hitter's left- and right-handed swings
-are different movements; pooling them would let stance dominate the GMM (cluster 0 = "bats L",
-cluster 1 = "bats R" instead of real swing shapes). So each stance is clustered as its own
-"player" — Cal Raleigh L vs Cal Raleigh R. One-way hitters have a single stance and are
-unaffected. Only horz_attack_angle is handedness-mirrored; the other four features are not,
-which is exactly why an unsplit switch hitter separates on stance.
-
-For each qualifying unit (>= MIN_SWINGS competitive tracked swings, 2024-26 pooled):
-  - z-score the 5 shape features within that hitter,
-  - fit full-covariance GMMs for increasing k and select k by minimum BIC (early-stopping
-    once BIC stops improving),
-  - merge component pairs closer than MERGE_SEP into one shape (BIC over-segments at large n
-    into large-but-near-duplicate components; the merge collapses those back so each cluster is
-    a genuinely distinct shape). Reported k is the post-merge count.
-  - assign every swing to its most-likely (merged) component with a responsibility/confidence,
-  - cluster 0 = the hitter's primary swing.
-
 Input:  data/swings_model.parquet
 Outputs:
   data/cluster_assignments.parquet  one row per swing: play_id, batter_id, batter_stand, cluster, resp_max

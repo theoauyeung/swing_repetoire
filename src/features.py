@@ -2,19 +2,6 @@
 keeps the ones a hitter actually meant. Everything downstream assumes he was trying to hit the
 ball hard, so a defensive flail left in the data would read as a deliberate shape change.
 
-Competitive swing (operational definition, no DB flag exists):
-  - bat-tracked (5 shape features present)
-  - not a bunt (is_bunt == 0)
-  - bat_speed >= 50 mph  (removes checked/emergency/defensive swings)
-
-Also builds `horz_attack_angle_pull` (+ = pull side, both hands). horz_attack_angle is already a
-BATTER-RELATIVE metric — raw + = toward the OPPOSITE field for both L and R (verified against
-bearing_angle: corr(raw horz, pull) = -0.47 RHH / -0.45 LHH, i.e. pull = negative raw for both),
-so the pull frame is a uniform negation, NOT a per-hand mirror. (The old `*(L?-1:1)` mirror left
-RHH inverted — RHH "pull" was actually oppo — and only LHH came out right; see worklog 2026-07-09.)
-Note plate_x, by contrast, IS absolute (catcher frame) and needs a real per-hand flip — that lives
-in xRV_model.build_features / cards.py, not here.
-
 Input:  data/swings_2024_2026_mlb.parquet
 Output: data/swings_model.parquet  (competitive tracked swings, features + context + value)
 

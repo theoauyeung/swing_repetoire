@@ -2,9 +2,6 @@
 as a control. Pitchers throw different stuff at 0-2 than at 2-0, so without this a swing's
 reaction to nastier pitching gets scored as the hitter choosing to adjust.
 
-It matters a lot: a hitter's raw situational movement repeats at r=0.616 with location
-controls alone, and only 0.394 once the pitch is accounted for. Most of it was reaction.
-
 Source: data/pitch_chars.parquet, written by src/extract_pitch_chars.R (sabRmetrics).
 """
 from pathlib import Path

@@ -2,28 +2,6 @@
 other. A hitter with two swings that look nothing alike scores like one with four that all look
 the same.
 
-It only measures width. It says nothing about whether those swings are any good or whether he
-uses them in the right spots — that is what Swing+ and the adjustability work are for.
-
-
-Definition (per (batter, stand) unit) — a count-aware functional-diversity measure:
-  - standardize each of the 5 shape features by the cohort swing-level SD,
-  - mean_pairwise_dist = USAGE-WEIGHTED MEAN pairwise Euclidean distance between the unit's
-    cluster centroids in that league-z space (pair weight = weight_i * weight_j),
-  - effective_shapes = 1 / sum(weight_i^2)  (inverse-Simpson: the usage-EFFECTIVE number of
-    shapes, so a rarely-used emergency shape barely counts; k even-weight => effective ~ k),
-  - expansiveness = mean_pairwise_dist * sqrt(effective_shapes)  — rewards BOTH how different the
-    shapes are AND how many (effective) shapes a hitter carries; k=1 => 0. (Mean pairwise
-    distance alone is count-blind — it's the average dissimilarity of two random swings, so a
-    hitter with 2 extreme shapes beat one with 6 moderate ones. But `* effective_shapes` overshot
-    the other way — count then drove ~84% of the ranking and shape-count groups barely overlapped.
-    The `sqrt` tempers the count term so spread and count contribute ~equally: a genuinely wide
-    2-shape repertoire can still out-rank a mediocre 5-shape one.)
-  - Repertoire+ = 50 + 10 * z(expansiveness), clipped to [0, 100] (50 = league-average width;
-    same scale as Swing+), plus a 0-100 percentile.
-  - per-feature spread breakdown: usage-weighted mean pairwise |centroid gap| for each feature,
-    in raw units (mph / degrees / ft), so you can see WHICH axis makes a hitter expansive.
-
 Input:  data/cluster_summary.parquet, data/swings_model.parquet
 Outputs:
   data/repertoire_scores.parquet  one row per (batter, stand): expansiveness, repertoire_plus,

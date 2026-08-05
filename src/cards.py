@@ -2,28 +2,6 @@
 when he goes to it, and what it's worth. One row per swing, so you can read "his B swing is 3 mph
 slower and 5 degrees flatter, he uses it with two strikes, and it costs him nothing."
 
-Turns each per-(batter, stand) cluster from a bare index into a self-describing shape: an archetype
-tag (Layer 1), a name relative to the hitter's own primary swing, the situations it's over-used in,
-and its run value in-context + versus the primary in matched situations. One row per (unit, cluster).
-
-Card fields per shape:
-  - archetype_name  (Layer 1 tag)
-  - role            'primary' (cluster 0, the highest-usage swing) or 'secondary'
-  - name_delta      readable geometry delta. Primary: vs the league (cohort) average. Secondary:
-                    vs THIS hitter's primary. Top features by standardized magnitude, e.g.
-                    "+5deg uppercut, -3mph slower, +6deg pull". This is where the bat_speed gap
-                    between same-archetype shapes (Ohtani's two Uppercut Pulls) surfaces.
-  - when_label      contexts where the shape is OVER-indexed vs the hitter's own baseline usage
-                    (lift = P(shape | context)/P(shape) - 1), across count / location / pitch type /
-                    base-out. Distinctive deployment, not raw share. Base-out is deployment-only.
-  - grade           mean xrv_grade (0-100, 50 = league-avg swing) over the shape's swings: value of
-                    deploying this shape across the contexts it is actually used in (design Part C.1).
-  - matched_runs100 within-batter matched contrast (design Part C.2): mean xRV of this shape MINUS
-                    the primary's, over count x height x pitch-type strata where BOTH appear, usage-
-                    weighted, x100 = runs per 100 swings. NaN for the primary (it is the reference).
-                    Base-out is NOT a value stratum (xRV excludes game state by design).
-  - matched_n / matched_thin  support behind the contrast; thin flag when it's too sparse to trust.
-
 Input:  data/cluster_summary, shape_archetypes, cluster_assignments, xrv_swings, swings_model (parquet)
 Outputs:
   data/shape_cards.parquet     one row per (batter, stand, cluster) with all card fields

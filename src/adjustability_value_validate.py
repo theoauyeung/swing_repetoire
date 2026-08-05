@@ -2,9 +2,6 @@
 swing that never happened has no real outcome attached, so the runs come from a model, and
 a model will happily hand back a number even when there is nothing there.
 
-Three checks: shuffle the situations and confirm the score collapses, see whether it predicts
-real production, and see whether a hitter scores the same in 2024 and 2025.
-
 Run: python src/adjustability_value_validate.py
 """
 import argparse

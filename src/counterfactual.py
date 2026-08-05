@@ -1,9 +1,6 @@
 """Builds the "what would his swing have looked like if the situation hadn't moved him"
 comparison swing. Pure math, no files and no run-value model, so the piece where a quiet
 bug would poison every published number can be tested on its own.
-
-The comparison swing keeps his average swing exactly as it is and strips out only the
-part that moves with the count, the baserunners and the pitcher's hand.
 """
 import numpy as np
 import pandas as pd

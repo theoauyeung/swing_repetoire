@@ -2,35 +2,6 @@
 was. Location forces most of any swing, so this measures only what is left over that still
 moves with the count, the baserunners and the pitch type.
 
-Single-regression build. Per (batter, stand) unit (2024-25, >= MIN_SWINGS), for each of 3 volitional
-trait dials (bat_speed, swing_length, swing_path_tilt) we fit ONE regression of the dial on
-
-    dial ~ pitch-location surface  +  situation (count, game state, pitch type)
-
-and read adjustability off as the INCREMENTAL variance the situation explains once location is already
-in the model — adjusted R^2 of the full model minus the location-only model — averaged over the 3
-dials and floored at 0. 0 = the situation adds nothing to a swing already pinned by where the pitch
-is; higher = his swing systematically moves with the situation.
-
-Why one joint regression per hitter (not a pooled league model): a pooled model shares one situation
-coefficient across everyone, so it reflects a hitter's situation MIX, not his responsiveness. Per-hitter
-responsiveness needs hitter x situation terms, which by Frisch-Waugh-Lovell is exactly this per-unit
-joint fit. It replaces the earlier two-stage build (global location residualization, then a separate
-per-hitter situation R^2): one model is easier to read and fits each hitter's OWN location relationship
-rather than a single league-average surface.
-
-The two attack angles are left out of the dials — they are the most location-forced. adjustability is
-an UNSIGNED magnitude (a variance share, not a direction).
-
-The headline is the whole situation over a location-only baseline. Each per-axis number is that axis's
-UNIQUE contribution — the variance it adds on top of location AND the other two situation axes — so
-adj_count holds pitch type fixed and is not two-strike pitch-mix relabeled:
-
-  adjustability  = all of the situation (count + game state + pitch), over location-only  -- headline
-  adj_count      = unique add of the count      (balls, strikes),         net of location + game state + pitch
-  adj_gamestate  = unique add of the game state (base state, outs),         net of location + count + pitch
-  adj_pitch      = unique add of the pitch type (FB / breaking / offspeed), net of location + count + game state
-
 Input:  data/swings_model.parquet
 Output: data/adjustability.parquet   (headline column: adjustability)
 
