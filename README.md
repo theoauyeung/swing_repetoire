@@ -56,7 +56,7 @@ python src/adjustability_policy.py              # what he should do instead
 #   → adjustability_prescriptions.parquet
 ```
 
-The helpers are separate so the risky parts can be tested alone: `src/counterfactual.py` builds the comparison swing (pure math, no I/O) and `src/uncommited/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
+`src/adjustability_value.py` reads top to bottom as one procedure — load, fit one hitter's swing rule, price a shape in runs, compare against a replacement, then the two prescription layers — with a numbered map in its module docstring. `tests/test_adjustability_value.py` pins the properties the argument depends on (the comparison swing is mean-preserving, the three axes sum to the total, every swing is predicted out of fold). `src/uncommited/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
 
 An earlier design varied the situation instead and watched realized run value (matched two-strike / base-state / platoon penalties). It is retired and lives in `trash/adjustability_penalties.py`; its penalty columns are frozen in `adjustability.parquet` and are still read for the convergent-validity check.
 

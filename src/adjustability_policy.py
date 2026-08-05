@@ -19,8 +19,6 @@ DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import adjustability_value as av                                     # noqa: E402
-import counterfactual as cf                                          # noqa: E402
-import xRV_model as xrv                                              # noqa: E402
 from adjustability import KEY                                        # noqa: E402
 
 SHAPE = av.SHAPE
@@ -70,7 +68,7 @@ def score_candidates(models, run_value_tables, group, candidates):
     scoring once is the same arithmetic at a fraction of the overhead.
     """
     tiled_pitches = pd.concat([group] * len(candidates), ignore_index=True)
-    scored = av.score_shapes(models, run_value_tables, tiled_pitches, np.vstack(candidates))
+    scored = av.runs_for(models, run_value_tables, tiled_pitches, np.vstack(candidates))
     return scored.reshape(len(candidates), len(group))
 
 
@@ -107,9 +105,9 @@ def directions(gradient):
     return by_lever
 
 
-def feasible(shifted, cell_means_sd, centroids, env):
+def feasible(hitter, shifted, cell_means_sd, centroids):
     """Envelope rail on every swing, repertoire rail on every cell's mean shape."""
-    if cf.fraction_outside(shifted, env) >= cf.MAX_OUTSIDE:
+    if hitter.fraction_outside(shifted) >= av.MAX_OUTSIDE:
         return False
     centroid_gaps = []
     for cell_mean in cell_means_sd:
@@ -141,18 +139,18 @@ def _held_out_gain(candidate_indices, runs_by_season, seasons):
     return float(np.mean(gains))
 
 
-def axis_prescriptions(models, run_value_tables, fit, axis, labels, gradient,
-                       centroids, env, scale):
+def axis_prescriptions(models, run_value_tables, hitter, axis, labels, gradient,
+                       centroids, scale):
     """Best signed step for each dial on one axis, all mean-preserving, vs the status quo."""
     contrast = contrast_vector(labels, axis)
     if contrast is None or not np.any(contrast):
         return []
-    group, base = fit["group"], fit["shape_actual"]
+    group, base = hitter.swings, hitter.as_he_swung_it
 
     cells, cell_masks = [], []
     for cell in pd.unique(labels):
         in_cell = labels == cell
-        if in_cell.sum() >= cf.MIN_CELL_SWINGS:
+        if in_cell.sum() >= av.MIN_CELL_SWINGS:
             cells.append(cell)
             cell_masks.append(in_cell)
 
@@ -164,7 +162,7 @@ def axis_prescriptions(models, run_value_tables, fit, axis, labels, gradient,
             shift = np.outer(contrast, direction * step)
             shifted = base + shift * scale
             cell_means_sd = [shifted[mask].mean(axis=0) / scale for mask in cell_masks]
-            if feasible(shifted, cell_means_sd, centroids, env):
+            if feasible(hitter, shifted, cell_means_sd, centroids):
                 shifts.append(shift)
                 candidate_tags.append((lever, step))
 
@@ -176,7 +174,7 @@ def axis_prescriptions(models, run_value_tables, fit, axis, labels, gradient,
     # shipped `step_sd` is still the pooled argmax — that is the best estimate of the
     # recommendation — but `runs_gain` is what it is worth on unseen swings.
     years = group["game_year"].to_numpy()
-    seasons = [year for year in np.unique(years) if (years == year).sum() >= cf.MIN_CELL_SWINGS]
+    seasons = [year for year in np.unique(years) if (years == year).sum() >= av.MIN_CELL_SWINGS]
     runs_by_season = {}
     for year in seasons:
         runs_by_season[year] = scored[:, years == year].sum(axis=1)
@@ -205,10 +203,9 @@ def axis_prescriptions(models, run_value_tables, fit, axis, labels, gradient,
     return rows
 
 
-def unit_prescriptions(models, run_value_tables, fit, gradients, centroids, scale):
-    group = fit["group"]
-    env = cf.envelope(fit["observed"])
-    cells = cf.cell_labels(group)
+def unit_prescriptions(models, run_value_tables, hitter, gradients, centroids, scale):
+    group = hitter.swings
+    cells = hitter.situation_cells()
     # The SITUATIONAL gradient, not the absolute one: the raw cell gradient is dominated
     # by the hitter's own baseline, so a direction built from it points at how he hits in
     # general rather than at what this situation asks for.
@@ -230,8 +227,8 @@ def unit_prescriptions(models, run_value_tables, fit, gradients, centroids, scal
             continue
         axis_gradient = np.sum(axis_gradient_parts, axis=0)
 
-        for row in axis_prescriptions(models, run_value_tables, fit, axis, labels,
-                                      axis_gradient, centroids, env, scale):
+        for row in axis_prescriptions(models, run_value_tables, hitter, axis, labels,
+                                      axis_gradient, centroids, scale):
             rows.append({
                 "batter_id": group["batter_id"].iloc[0],
                 "batter_stand": group["batter_stand"].iloc[0],
@@ -245,10 +242,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
-    models = av.load_models()
-    run_value_tables = xrv.load_run_value_tables()
-    swings = av.load_swings()
-    reference = av.load_policy_reference(swings)
+    models, run_value_tables, swings, reference = av.load_data()
     scale = np.asarray([reference["shape_sd"][feature] for feature in SHAPE], float)
     centroids = load_centroids(scale)
     all_gradients = pd.read_parquet(DATA / "adjustability_gradients.parquet")
@@ -264,8 +258,8 @@ def main():
     for i, (key, group) in enumerate(groups, 1):
         if key not in centroids or key not in gradients_by_unit:
             continue
-        fit = av.unit_fit(group.reset_index(drop=True), scale)
-        rows.extend(unit_prescriptions(models, run_value_tables, fit,
+        hitter = av.learn_how_he_swings(group.reset_index(drop=True), scale)
+        rows.extend(unit_prescriptions(models, run_value_tables, hitter,
                                        gradients_by_unit[key], centroids[key], scale))
         if i % 25 == 0:
             print(f"  {i}/{len(groups)} units", flush=True)
