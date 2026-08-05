@@ -24,10 +24,27 @@ DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import counterfactual as cf                                          # noqa: E402
+import db                                                            # noqa: E402
 import pitch_controls as pc                                          # noqa: E402
 import xRV_model as xrv                                              # noqa: E402
 from adjustability import KEY, MIN_SWINGS, SEASONS                   # noqa: E402
 from adjustability import add_context, location_design               # noqa: E402
+
+
+def compute_swing_plus() -> pd.DataFrame:
+    """Per-unit mean xrv_grade_neutral over 2024-25. The count-neutral grade is used so
+    swing_plus is not confounded by count distribution when it controls for hitter quality
+    alongside count-stratified quantities."""
+    seasons_sql = "(" + ", ".join(str(s) for s in SEASONS) + ")"
+    con = db.connect("xrv_swings")
+    result = con.sql(f"""
+        SELECT batter_id, batter_stand, AVG(xrv_grade_neutral) AS swing_plus
+        FROM xrv_swings
+        WHERE game_year IN {seasons_sql}
+        GROUP BY batter_id, batter_stand
+    """).df()
+    con.close()
+    return result
 
 SHAPE = xrv.SHAPE_FEATURES
 POLICY_REF = ROOT / "src" / "adjustability_policy_reference.json"
@@ -410,9 +427,9 @@ def main():
 
     adj = pd.read_parquet(DATA / "adjustability.parquet", columns=KEY + [
         "label", "adjustability", "adj_count", "adjustability_plus",
-        "adjustability_pctile", "swing_plus",
+        "adjustability_pctile",
         "twostrike_rv_penalty", "gamestate_rv_penalty", "platoon_rv_penalty",
-    ])
+    ]).merge(compute_swing_plus(), on=KEY, how="left")
     cards = pd.read_parquet(DATA / "shape_cards.parquet",
                             columns=KEY + ["role", "archetype_name", "grade"])
     primary = (cards[cards["role"] == "primary"][KEY + ["archetype_name", "grade"]]

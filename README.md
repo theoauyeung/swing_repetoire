@@ -44,25 +44,21 @@ python src/repertoire.py      # Repertoire+ (width)        → repertoire_scores
 python src/adjustability.py   # adjustability (movement)   → adjustability.parquet
 ```
 
-**Adjustment value** — two designs that pose different counterfactuals. Both are reported; neither is the single answer.
+**Adjustment value** — hold the situation fixed, vary the behaviour, and price the difference.
 
 ```bash
-# Design A — vary the SITUATION, watch realized run value.
-python src/adjustability_value_first_draft.py   # matched penalties + OLS
-#   → adds penalty columns to adjustability.parquet, writes results/adjustability_value_first_draft.md
-#   Still live upstream: Design B's validation consumes its penalty columns.
-
-# Design B — hold the situation fixed, vary the BEHAVIOUR. Headline.
 python src/adjustability_value.py               # ~10 min
 #   → adjustability_value.parquet (runs_total), adjustability_gradients.parquet
 python src/adjustability_value_validate.py      # ~25 min; --reuse skips the split-half recompute
 #   → results/adjustability_value.md
 
-# Design C — what he should do instead.
-python src/adjustability_policy.py              # → adjustability_prescriptions.parquet
+python src/adjustability_policy.py              # what he should do instead
+#   → adjustability_prescriptions.parquet
 ```
 
-Design B's helpers are separate so the risky parts can be tested alone: `src/counterfactual.py` builds the comparison swing (pure math, no I/O) and `src/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
+The helpers are separate so the risky parts can be tested alone: `src/counterfactual.py` builds the comparison swing (pure math, no I/O) and `src/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
+
+An earlier design varied the situation instead and watched realized run value (matched two-strike / base-state / platoon penalties). It is retired and lives in `trash/adjustability_penalties.py`; its penalty columns are frozen in `adjustability.parquet` and are still read for the convergent-validity check.
 
 **Presentation.**
 

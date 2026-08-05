@@ -42,12 +42,11 @@ python src/interpret.py      # Layer-1 archetype lexicon -> shape_archetypes + a
 python src/cards.py          # Layer-2 swing ID cards -> shape_cards.parquet + shape_cards_catalog.md
 python src/repertoire.py     # Repertoire+ -> repertoire_scores.parquet + repertoire_catalog.md
 python src/adjustability.py  # adjustability -> adjustability.parquet (headline column: adjustability)
-python src/adjustability_value_first_draft.py  # matched penalties + OLS -> adjustability.parquet (updated) + adjustability_value_first_draft.md
 python src/adjustability_value.py  # counterfactual adjustment value + prescriptions -> adjustability_value.parquet + adjustability_gradients.parquet (~10 min)
 python src/adjustability_value_validate.py  # validation -> results/adjustability_value.md (~25 min; --reuse skips the split-half recompute)
 ```
 
-Order: extract → features → cluster → xrv (built). `interpret.py` and `cards.py` are the interpretability overlay consuming cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py`, `adjustability.py`, `adjustability_value_first_draft.py`, and `adjustability_value.py` are the built Facet-2 stages; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; no test suite or build step yet.
+Order: extract → features → cluster → xrv (built). `interpret.py` and `cards.py` are the interpretability overlay consuming cluster + xrv outputs. `shape_card(name)` in cluster_results.ipynb renders a hitter's cards. `repertoire.py`, `adjustability.py`, and `adjustability_value.py` are the built Facet-2 stages; `value_model → within_batter → diversity → reports` remain unbuilt. Each stage is a standalone script with a `main()`; no test suite or build step yet.
 
 ### R leaderboards
 
@@ -75,20 +74,13 @@ Method (v4): one joint regression per hitter per dial, `dial ~ location surface 
 
 Why v4 is better: v3's global surface let pitch-movement-correlated-with-location leak into `adj_pitch`; per-hitter location control removed it (adj_pitch mean 0.058→0.030), so the headline is now count-led (corr with `adj_count` 0.72 > `adj_pitch` 0.57), pointing at the axis that actually pays off. Per-axis means: count 0.021, pitch 0.030, gamestate 0.002. `adj_count` is rank-stable across v3→v4 (r=0.94); `adj_pitch` moved most (r=0.75). YoY reliability (v4, recomputed 2026-07-23): `adjustability` r=0.67, `adj_count` r=0.69, `adj_pitch` r=0.64 — all repeatable; `adj_gamestate` r=0.28 is noise (v3 read 0.75/0.72/0.78/0.19, same conclusion). The v4 recompute lives in `adjustability_results.ipynb`. v2's directional construction is in git history (988a0f1). See research-design.md Part D + docs/adjustability-decontamination.md.
 
-### Adjustability value (first draft — matched penalties)
+### Adjustability value (retired first draft — matched penalties)
 
-`src/adjustability_value_first_draft.py` updates `data/adjustability.parquet` and writes `results/adjustability_value_first_draft.md`. This is the FIRST DRAFT of adjustability value — superseded as the headline by the counterfactual build below, but still a live upstream: it produces the penalty columns and `swing_plus` that the counterfactual's validation consumes. Three sections:
+RETIRED 2026-08-05 and moved out of the repo to `trash/adjustability_penalties.py` (gitignored). It posed a different counterfactual from the headline build — vary the SITUATION (2-strike vs 0-1, matched on `pitch_type × zone`) and watch realized `delta_run_exp` — rather than holding the situation fixed and varying the behaviour. Its outputs survive as frozen columns in `data/adjustability.parquet` (`twostrike_rv_penalty`, `gamestate_rv_penalty`, `platoon_rv_penalty`) and as `results/adjustability_value_first_draft.md`, both still read downstream. There is no live recompute path: add a season and those columns go stale while the rest of the build refreshes.
 
-**Section 1 — Multi-axis matched penalties** (output columns added to `adjustability.parquet`):
-Three situational penalties, all using realized `delta_run_exp` (not `xrv_grade`):
-- `twostrike_rv_penalty`: 2-strike vs 0-1 strike within (pitch_type × zone) — n=471 units
-- `gamestate_rv_penalty`: any runner vs empty within (pitch_type × zone × strikes) — n=471. Replaces the earlier RISP+0-out (n=267) and DP-avoid (n=428) split, which cut power unnecessarily; "any runner" aligns with how `adj_gamestate` is constructed (base_state = risp|on1|empty) and restores full coverage.
-- `platoon_rv_penalty`: same-hand vs opp-hand within (pitch_type × zone × strikes) — n=400. Switch-hitter units excluded: within a (batter_id, batter_stand) unit, switch hitters face near-exclusively opposite-hand pitchers (same_hand ≈ 0%), so those units don't survive the ≥3/≥3 cell filter.
-Also adds `swing_plus` (mean `xrv_grade_neutral`). All penalties use `delta_run_exp` to sidestep count mechanics in `xrv_grade`. Game-state and platoon penalties include strikes in the matching cell to hold count fixed.
+Its two pieces the live pipeline needed were migrated rather than trashed — `compute_swing_plus()` into `src/adjustability_value.py` (verified identical to the frozen column, max abs diff 0.0) and `_ols_clustered` into `src/adjustability_value_validate.py`, its only caller.
 
-**Section 2 — Between-batter OLS** (primary): each penalty regressed on its corresponding axis (+ `swing_plus` + `repertoire_pctile`), all z-scored, clustered SE by batter_id. `adj_pitch` excluded — pitch type is reactive, not a pre-pitch volitional lever. **Key findings (2026-08-03):** only count axis has a significant payoff: `adj_count` θ=+0.145 (SE=0.040, t=3.64, p=0.0003) on `twostrike_rv_penalty`. Game-state (any runner, p=0.13) and platoon (p=0.83) are null — mechanical adjustment is real but doesn't translate to detectable run-value benefits in these matched tests.
-
-**Section 3 — Swing-level DML** (fallback, kept for robustness): Robinson (1988) partial linear model with within-batter FE, XGBoost nuisance models, GroupKFold on batter_id. Known limitation: per-axis treatments (T_count, T_pitch) share variables with the confounder set, which may inflate r2_T and compress θ. Run `python src/adjustability_value_first_draft.py` to append DML results (~30 min).
+Findings worth keeping: `adj_count` θ=+0.145 (SE=0.040, t=3.64, p=0.0003) on `twostrike_rv_penalty`, with game-state (p=0.13) and platoon (p=0.83) null. That remains the project's strongest external-validity evidence, stronger than the headline build's Qualified verdict — cite it, but note it is no longer reproducible from the repo. A swing-level DML section was cut earlier the same day to `trash/dml_section.py`.
 
 ### Adjustability value (replacement benchmark — headline)
 

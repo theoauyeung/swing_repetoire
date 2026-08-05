@@ -10,13 +10,41 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from adjustability import KEY, SEASONS                    # noqa: E402
-from adjustability_value_first_draft import _ols_clustered            # noqa: E402
+
+
+def _ols_clustered(y: np.ndarray, X: np.ndarray, groups: np.ndarray) -> tuple:
+    """OLS with a sandwich SE clustered on groups. Returns (coefs, se, t, p, n, B),
+    where B is the cluster count and df = B - 1."""
+    coefs, *_ = np.linalg.lstsq(X, y, rcond=None)
+    resid = y - X @ coefs
+    n, k = X.shape
+
+    XtX_inv = np.linalg.pinv(X.T @ X)
+    meat = np.zeros((k, k))
+    unique_groups = np.unique(groups)
+    B = len(unique_groups)
+    for g in unique_groups:
+        mask = groups == g
+        score = X[mask].T @ resid[mask]
+        meat += np.outer(score, score)
+    meat *= B / (B - 1)  # small-sample correction
+
+    vcov = XtX_inv @ meat @ XtX_inv
+    se = np.sqrt(np.clip(np.diag(vcov), 0, None))
+    t_stats = np.where(se > 0, coefs / se, np.nan)
+    p_vals = np.where(
+        se > 0,
+        [2 * float(stats.t.sf(abs(t), df=B - 1)) for t in t_stats],
+        np.nan,
+    )
+    return coefs, se, t_stats, p_vals, n, B
 
 
 def season_outcomes():
@@ -292,7 +320,7 @@ def main(reuse=False):
             "runs_interaction", "runs_total_2k"]].describe().round(3).to_markdown(),
         "",
         "## Convergent validity\n",
-        ("`runs_count` against the matched penalties from `adjustability_value_first_draft.py`, "
+        ("`runs_count` against the matched penalties from the retired matched-penalty design, "
          "which "
          "share no machinery with this build — they use realized `delta_run_exp` within "
          "`pitch_type x zone` cells.\n"),
