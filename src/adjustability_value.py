@@ -22,6 +22,7 @@ from xgboost import XGBClassifier, XGBRegressor
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "uncommited"))
 
 import counterfactual as cf                                          # noqa: E402
 import db                                                            # noqa: E402
@@ -47,7 +48,7 @@ def compute_swing_plus() -> pd.DataFrame:
     return result
 
 SHAPE = xrv.SHAPE_FEATURES
-POLICY_REF = ROOT / "src" / "adjustability_policy_reference.json"
+POLICY_REF = ROOT / "src" / "uncommited" / "adjustability_policy_reference.json"
 LOAD_COLS = KEY + [
     "play_id", "game_pk", "game_year", "batter_full_name", "balls", "strikes", "outs_when_up",
     "plate_x", "plate_z", "sz_top", "sz_bot", "pitch_type", "pitcher_throws",

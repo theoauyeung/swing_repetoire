@@ -154,3 +154,6 @@ experiments/best_params.*.json
 *.md
 !README.md
 !docs/project_resume.md
+
+# Local-only scripts: data pulls, DB access, presentation helpers
+src/uncommited/

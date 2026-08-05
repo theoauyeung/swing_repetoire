@@ -22,8 +22,8 @@ Run from repo root with the `driveline` env active. Each stage reads the parquet
 **Foundation** — every later stage depends on these three, in this order.
 
 ```bash
-python src/extract.py    # mlb_db → swings_2024_2026_mlb.parquet   (slow: full DB pull)
-python src/features.py   # competitive-swing filter → swings_model.parquet
+python src/uncommited/extract.py    # mlb_db → swings_2024_2026_mlb.parquet   (slow: full DB pull)
+python src/uncommited/features.py   # competitive-swing filter → swings_model.parquet
 python src/cluster.py    # per-batter GMM → cluster_*, batter_repertoire
 python src/xRV_model.py  # per-swing run value → xrv_swings.parquet
 ```
@@ -33,8 +33,8 @@ python src/xRV_model.py  # per-swing run value → xrv_swings.parquet
 **Interpretability overlay** — names and describes the shapes `cluster.py` found. Nothing downstream depends on these; they exist to make a cluster readable.
 
 ```bash
-python src/interpret.py  # archetype lexicon → shape_archetypes.parquet
-python src/cards.py      # per-shape scouting cards → shape_cards.parquet
+python src/swing_label.py  # archetype lexicon → shape_archetypes.parquet
+python src/uncommited/cards.py      # per-shape scouting cards → shape_cards.parquet
 ```
 
 **Repertoire and adjustment** — the batter-level scalars.
@@ -49,28 +49,28 @@ python src/adjustability.py   # adjustability (movement)   → adjustability.par
 ```bash
 python src/adjustability_value.py               # ~10 min
 #   → adjustability_value.parquet (runs_total), adjustability_gradients.parquet
-python src/adjustability_value_validate.py      # ~25 min; --reuse skips the split-half recompute
+python src/uncommited/adjustability_value_validate.py      # ~25 min; --reuse skips the split-half recompute
 #   → results/adjustability_value.md
 
 python src/adjustability_policy.py              # what he should do instead
 #   → adjustability_prescriptions.parquet
 ```
 
-The helpers are separate so the risky parts can be tested alone: `src/counterfactual.py` builds the comparison swing (pure math, no I/O) and `src/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
+The helpers are separate so the risky parts can be tested alone: `src/counterfactual.py` builds the comparison swing (pure math, no I/O) and `src/uncommited/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
 
 An earlier design varied the situation instead and watched realized run value (matched two-strike / base-state / platoon penalties). It is retired and lives in `trash/adjustability_penalties.py`; its penalty columns are frozen in `adjustability.parquet` and are still read for the convergent-validity check.
 
 **Presentation.**
 
 ```bash
-python src/leaderboard_preprocess.py   # big parquets → four small ones R can open
-Rscript src/leaderboard_table.R        # leaderboard PNGs via gt + mlbplotR
-python src/value_flowchart.py          # the diagram above
+python src/uncommited/leaderboard_preprocess.py   # big parquets → four small ones R can open
+Rscript src/uncommited/leaderboard_table.R        # leaderboard PNGs via gt + mlbplotR
+python src/uncommited/value_flowchart.py          # the diagram above
 ```
 
 `leaderboard_preprocess.py` is not optional — Arrow hangs on macOS when R opens several large parquets at once, so all the aggregation happens in Python first.
 
-**Utility.** `src/db.py` exposes every project parquet as a DuckDB view for one-off queries. `src/extract_pitch_chars.R` pulls pitch characteristics off Baseball Savant. `src/commit.py` is an auto-commit watcher, unrelated to the analysis.
+**Utility.** `src/uncommited/db.py` exposes every project parquet as a DuckDB view for one-off queries. `src/uncommited/extract_pitch_chars.R` pulls pitch characteristics off Baseball Savant. `src/commit.py` is an auto-commit watcher, unrelated to the analysis.
 
 ## Notebooks
 
@@ -95,7 +95,7 @@ VIRTUAL_ENV=~/.venvs/driveline uv pip install <pkg>
 
 R 4.6.0 at `/usr/local/bin/Rscript` with arrow, dplyr, gt, gtExtras, mlbplotR, scales and webshot2. `gtsave()` needs headless Chrome via webshot2.
 
-`data/` is gitignored and holds all extracts — never commit it. DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` via `get_secret()` in `src/extract.py`. Only needed to re-pull raw data; the resume bundle already has every extract.
+`data/` is gitignored and holds all extracts — never commit it. DB credentials (`BIOMECH_DB_HOST/PORT/USER/PASS`) resolve from `~/.claude/.env` via `get_secret()` in `src/uncommited/extract.py`. Only needed to re-pull raw data; the resume bundle already has every extract.
 
 ## New machine
 

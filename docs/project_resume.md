@@ -38,7 +38,7 @@ written for **macOS**.
 
 **Fix these machine-specific paths on the Mac:** `.vscode/settings.json`
 (`python.defaultInterpreterPath` → your Mac venv, e.g. `${workspaceFolder}/.venv/bin/python`) and the
-hardcoded `Rscript` path in the notebooks + `src/leaderboard_table.R` — on macOS R lives at
+hardcoded `Rscript` path in the notebooks + `src/uncommited/leaderboard_table.R` — on macOS R lives at
 `/usr/local/bin/Rscript` (Intel) or `/opt/homebrew/bin/Rscript` (Apple Silicon), or just put it on
 `PATH`. **R (leaderboards only, optional):** R 4.6+ with `arrow, dplyr, gt, gtExtras, mlbplotR, scales,
 webshot2`. **DB access is only needed to re-pull raw data** (`extract.py`) — the bundle already contains

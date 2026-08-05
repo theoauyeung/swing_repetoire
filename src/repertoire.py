@@ -23,7 +23,7 @@ DATA = ROOT / "data"
 # it here; every later run (2026+ added) reuses these constants instead of re-baselining. Delete
 # the file to re-peg. It holds only league-level aggregates (SDs, mean/SD, a percentile grid) — no
 # athlete PII — so unlike data/ it lives in-repo and is committed.
-REF_PATH = ROOT / "src" / "repertoire_reference.json"
+REF_PATH = ROOT / "src" / "uncommited" / "repertoire_reference.json"
 REF_SEASONS = [2024, 2025]
 
 # 5 shape features. cluster_summary stores centroids as `{col}_mean`; swings_model has the raw
