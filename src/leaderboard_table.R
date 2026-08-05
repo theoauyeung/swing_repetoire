@@ -1,20 +1,7 @@
 # leaderboard_table.R
 # Builds the presentation leaderboards — Swing+, Repertoire+, adjustability — as image files with
 # player headshots. Display only; every number it shows was computed upstream in Python.
-#
-# Two modes:
-#   Rscript src/leaderboard_table.R              # build all 6 leaderboards (top/bottom x 3)
-#   Rscript src/leaderboard_table.R "Arraez"     # per-hitter drill-down: that batter's shapes only
-#
-# Required packages:
-#   install.packages(c("arrow","dplyr","gt","gtExtras","mlbplotR","scales","webshot2"))
-#
-# batter_id is the MLBAM id, which is what mlbplotR keys headshots on.
-# Coloring: diverging blue(low) -> white -> red(high), with the domain fixed to the FULL qualified
-# pool for each metric (not just the shown rows), so the Top N reads all-red and the Bottom N
-# all-blue -- and a drill-down's shapes sit on the same league scale.
-# Writes results/plots/{swingplus,repertoire}_leaderboard_gt.png + *_bottom_gt.png + by-cluster pair,
-# or shape_breakdown_<name>_gt.png in drill mode.
+
 
 suppressMessages({
   library(arrow)
@@ -269,19 +256,6 @@ pol_labels <- list(Rank = "#", batter_id = "", label = "Batter", batter_stand = 
                    Sw = "Swings", Adj = "Adj+", Swing = "Swing+")
 pol_align  <- c("Rank", "batter_stand", "Runs", "RunsK", "RunsCount", "RunsGS", "RunsPlatoon",
                 "Sw", "Adj", "Swing")
-pol_foot   <- paste0(
-  "Season runs gained or lost because of HOW the hitter adjusts, measured against the way a ",
-  "randomly drawn other hitter would have adjusted on the same pitches he saw, averaged over 10 ",
-  "draws. Positive = his adjustments beat the borrowed ones; negative = another hitter's approach ",
-  "would have played better in his spots. About half the league lands on each side, which is the ",
-  "point -- grading against not adjusting at all put 96% on the positive side, and that was a ",
-  "benchmark problem, not a finding. Count, Game St and Platoon swap one axis at a time and do ",
-  "not sum exactly to the total, since the axes interact. Priced by xRV at the real count; the ",
-  "pitch itself (type, velocity, movement, spin) is a control and is never swapped, because ",
-  "reacting to a slider is not the same as choosing to adjust. Per 1000 is the rate column and is ",
-  "the one to compare hitters on; Total Runs still partly reflects playing time. 2024-25, min 400 ",
-  "swings. Platoon is near zero for switch-hitter units, which face almost no same-hand pitching ",
-  "within a stance.")
 
 top_pol <- pol_raw |> head(TOP_N)
 bot_pol <- pol_raw |> tail(TOP_N) |> arrange(Runs) |> mutate(Rank = row_number())
@@ -290,13 +264,13 @@ make_leaderboard(top_pol |> select(all_of(pol_cols)),
                  "Runs", pal_pol, pol_labels, pol_align,
                  "**Adjustment Runs — Leaders**",
                  sprintf("Runs his way of adjusting is worth over another hitter's, on the same pitches  &middot;  n=%d  &middot;  color = Total Runs", n_pol),
-                 fig_path("adjustability_value_top_gt.png"), footnote = pol_foot, width = 1050)
+                 fig_path("adjustability_value_top_gt.png"), width = 1050)
 
 make_leaderboard(bot_pol |> select(all_of(pol_cols)),
                  "Runs", pal_pol, pol_labels, pol_align,
                  "**Adjustment Runs — Trailers**",
                  sprintf("Hitters another hitter's adjustments would have out-performed  &middot;  same pool (n=%d)  &middot;  color = Total Runs", n_pol),
-                 fig_path("adjustability_value_bottom_gt.png"), footnote = pol_foot, width = 1050)
+                 fig_path("adjustability_value_bottom_gt.png"), width = 1050)
 
 # ── Policy prescription matrix: which dial to move, and how far (unit = batter x stand) ──────────
 # Reads data/adjustability_prescriptions.parquet (written by src/adjustability_policy.py), long at
@@ -344,21 +318,6 @@ presc_wide <- presc_long |>
 # Shared diverging scale over the step grid, symmetric about zero so white is "no change".
 pal_presc <- col_numeric(PAL_COLS, domain = c(-0.75, 0.75))
 
-presc_foot <- paste0(
-  "Prescribed change in league SD, applied at two strikes relative to no strikes. Blue = do less ",
-  "of it with two strikes, red = do more, white = the search could not beat his status quo. Every ",
-  "candidate is re-graded through the run-value model and thrown out unless the resulting swing ",
-  "sits inside one of his own existing swing shapes and inside his observed range, so nothing here ",
-  "asks for a swing he has never made. The move is mean-preserving: it reallocates his swing ",
-  "across counts rather than changing his average swing. Runs is what the winning single-dial move ",
-  "is worth over a season, and it is an honest price: the dial and the step are chosen on one ",
-  "season and scored on the other, so it is not the peak of its own search. That test leaves 71% ",
-  "of hitters still positive (median +2.1 runs), but 29% do not survive it, so read the dial ",
-  "before the decimal. Bat speed is excluded as a lever -- a hitter's hardest swings whiff less ",
-  "and hit harder, which is a readout of being on time rather than a dial he can choose, so a ",
-  "model allowed to move it just tells everyone to swing harder. Feasibility beyond the two rails ",
-  "above is out of model: this prices a swing change, it does not know whether he can execute it.")
-
 presc_cols <- c("Rank", "batter_id", "label", "batter_stand", unname(DIAL_LAB),
                 "Best", "Gain", "Swing")
 
@@ -381,7 +340,6 @@ presc_tbl <- presc_wide |>
              subtitle = md(sprintf(
                "Blue = less of it with two strikes &middot; red = more &middot; ranked by runs left on the table &middot; n=%d units",
                nrow(presc_wide)))) |>
-  tab_footnote(footnote = presc_foot, locations = cells_column_spanners()) |>
   tab_options(table.font.size = 13, data_row.padding = px(3), table.width = px(1080))
 
 save_png(presc_tbl, fig_path("adjustability_prescription_2k_gt.png"))
