@@ -9,7 +9,7 @@ Outputs:
   data/archetype_lexicon.parquet  one row per archetype: id, name, raw-unit centroid, n_shapes
   data/archetype_lexicon.md       human-readable catalog
 
-Run:  python src/interpret.py
+Run:  python src/swing_label.py
 """
 from pathlib import Path
 import numpy as np

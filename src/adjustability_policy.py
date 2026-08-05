@@ -29,7 +29,7 @@ SHAPE = av.SHAPE
 # positive in 96% of cells while every geometry dial is two-sided. That is reverse causality,
 # not a free lever: bat speed measured on a swing mostly reads out whether he was on time, so
 # "add bat speed" decodes to "be fooled less often" and is not an adjustment he can choose.
-# Same carve interpret.py already makes for archetypes (bat_speed is state-not-trait, ICC 0.126).
+# Same carve swing_label.py already makes for archetypes (bat_speed is state-not-trait, ICC 0.126).
 LEVERS = [d for d in SHAPE if d != "bat_speed"]
 STEP_GRID = [-0.75, -0.5, -0.3, -0.15, 0.15, 0.3, 0.5, 0.75]   # league-SD units, signed
 MAX_CENTROID_SD = 1.0                    # Euclidean, 5-dim, league-SD units

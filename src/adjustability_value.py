@@ -4,11 +4,6 @@ swings, and add up the difference over a season.
 
     runs_total = sum over swings of [ xRV(his adjustment) - xRV(a replacement hitter's) ]
 
-Output: data/adjustability_value.parquet     (unit level)
-        data/adjustability_gradients.parquet (unit x axis x cell x dial)
-Run   : python src/adjustability_value.py            (full, ~10 min)
-        python src/adjustability_value.py --verify   (scoring correctness check only)
-        python src/adjustability_value.py --limit 25 (fast subset for iteration)
 """
 import argparse
 import json
@@ -31,23 +26,9 @@ import xRV_model as xrv                                              # noqa: E40
 from adjustability import KEY, MIN_SWINGS, SEASONS                   # noqa: E402
 from adjustability import add_context, location_design               # noqa: E402
 
-
-def compute_swing_plus() -> pd.DataFrame:
-    """Per-unit mean xrv_grade_neutral over 2024-25. The count-neutral grade is used so
-    swing_plus is not confounded by count distribution when it controls for hitter quality
-    alongside count-stratified quantities."""
-    seasons_sql = "(" + ", ".join(str(s) for s in SEASONS) + ")"
-    con = db.connect("xrv_swings")
-    result = con.sql(f"""
-        SELECT batter_id, batter_stand, AVG(xrv_grade_neutral) AS swing_plus
-        FROM xrv_swings
-        WHERE game_year IN {seasons_sql}
-        GROUP BY batter_id, batter_stand
-    """).df()
-    con.close()
-    return result
-
 SHAPE = xrv.SHAPE_FEATURES
+N_SEASONS = len(SEASONS)
+AXIS_NAMES = list(cf.AXES)
 POLICY_REF = ROOT / "src" / "uncommited" / "adjustability_policy_reference.json"
 LOAD_COLS = KEY + [
     "play_id", "game_pk", "game_year", "batter_full_name", "balls", "strikes", "outs_when_up",
@@ -56,12 +37,28 @@ LOAD_COLS = KEY + [
 ] + SHAPE
 
 
+def compute_swing_plus() -> pd.DataFrame:
+    """Per-unit mean xrv_grade_neutral over 2024-25. The count-neutral grade is used so
+    swing_plus is not confounded by count distribution when it controls for hitter quality
+    alongside count-stratified quantities."""
+    seasons_sql = "(" + ", ".join(str(season) for season in SEASONS) + ")"
+    connection = db.connect("xrv_swings")
+    swing_plus_table = connection.sql(f"""
+        SELECT batter_id, batter_stand, AVG(xrv_grade_neutral) AS swing_plus
+        FROM xrv_swings
+        WHERE game_year IN {seasons_sql}
+        GROUP BY batter_id, batter_stand
+    """).df()
+    connection.close()
+    return swing_plus_table
+
+
 def load_models():
     """The three persisted boosters from src/xRV_model.py."""
-    specs = [("p_bip", XGBClassifier), ("p_foul", XGBClassifier), ("v_bip", XGBRegressor)]
+    model_specs = [("p_bip", XGBClassifier), ("p_foul", XGBClassifier), ("v_bip", XGBRegressor)]
     models = {}
-    for name, cls in specs:
-        model = cls(enable_categorical=True)
+    for name, model_class in model_specs:
+        model = model_class(enable_categorical=True)
         model.load_model(DATA / "xrv_models" / f"{name}.json")
         models[name] = model
     return models
@@ -74,14 +71,14 @@ def load_swings(with_pitch_chars=True):
     which infers categories from whatever it is handed — scoring per-unit frames would
     give each unit its own category codes and silently misalign every prediction.
     """
-    df = pd.read_parquet(DATA / "swings_model.parquet", columns=LOAD_COLS)
-    df = df[df["game_year"].isin(SEASONS)]
-    df["pitch_type"] = df["pitch_type"].astype("category")
-    df = add_context(df).dropna(subset=SHAPE)
+    swings = pd.read_parquet(DATA / "swings_model.parquet", columns=LOAD_COLS)
+    swings = swings[swings["game_year"].isin(SEASONS)]
+    swings["pitch_type"] = swings["pitch_type"].astype("category")
+    swings = add_context(swings).dropna(subset=SHAPE)
     if with_pitch_chars:
-        df = pc.join_pitch_chars(df)
-    sizes = df.groupby(KEY, observed=True)[SHAPE[0]].transform("size")
-    return df[sizes >= MIN_SWINGS].reset_index(drop=True)
+        swings = pc.join_pitch_chars(swings)
+    swings_per_unit = swings.groupby(KEY, observed=True)[SHAPE[0]].transform("size")
+    return swings[swings_per_unit >= MIN_SWINGS].reset_index(drop=True)
 
 
 def score_shapes(models, run_value_tables, group, shape_matrix):
@@ -91,13 +88,25 @@ def score_shapes(models, run_value_tables, group, shape_matrix):
     under test is whether compression buys enough contact to pay for the strikeout risk.
     """
     frame = group.copy()
-    for j, feature in enumerate(SHAPE):
-        frame[feature] = shape_matrix[:, j]
+    for dial_index, feature in enumerate(SHAPE):
+        frame[feature] = shape_matrix[:, dial_index]
     enriched = xrv.build_features(frame)
     prob_bip  = models["p_bip"].predict_proba(enriched[xrv.FEATURES])[:, 1]
     prob_foul = models["p_foul"].predict_proba(enriched[xrv.FEATURES])[:, 1]
     value_bip = models["v_bip"].predict(enriched[xrv.FEATURES])
     return xrv.assemble_xrv(enriched, prob_bip, prob_foul, value_bip, run_value_tables)
+
+
+def _score_displacement(models, run_value_tables, group, shape_cf, displacement_sd, scale_vector):
+    """xRV per swing when a displacement in league-SD units is added to the de-situated shape."""
+    shifted_shape = shape_cf + displacement_sd * scale_vector
+    return score_shapes(models, run_value_tables, group, shifted_shape)
+
+
+def _season_runs(models, run_value_tables, group, shape_matrix, baseline_xrv):
+    """Season runs `shape_matrix` gains over an already-scored baseline, on the same pitches."""
+    scored = score_shapes(models, run_value_tables, group, shape_matrix)
+    return float((scored - baseline_xrv).sum() / N_SEASONS)
 
 
 def shape_gradients(models, run_value_tables, group, shape_matrix, scale):
@@ -107,14 +116,15 @@ def shape_gradients(models, run_value_tables, group, shape_matrix, scale):
     takes, and that is where xRV is best supported. The +/- 0.1 SD step keeps the probe
     inside the shape cloud, so this reads a local slope rather than extrapolating.
     """
-    out = np.empty_like(shape_matrix)
-    for j in range(shape_matrix.shape[1]):
-        up, down = shape_matrix.copy(), shape_matrix.copy()
-        up[:, j] += cf.GRAD_STEP_SD * scale[j]
-        down[:, j] -= cf.GRAD_STEP_SD * scale[j]
-        out[:, j] = (score_shapes(models, run_value_tables, group, up)
-                     - score_shapes(models, run_value_tables, group, down)) / (2 * cf.GRAD_STEP_SD)
-    return out
+    gradients = np.empty_like(shape_matrix)
+    for dial_index in range(shape_matrix.shape[1]):
+        shape_up, shape_down = shape_matrix.copy(), shape_matrix.copy()
+        shape_up[:, dial_index]   += cf.GRAD_STEP_SD * scale[dial_index]
+        shape_down[:, dial_index] -= cf.GRAD_STEP_SD * scale[dial_index]
+        xrv_up   = score_shapes(models, run_value_tables, group, shape_up)
+        xrv_down = score_shapes(models, run_value_tables, group, shape_down)
+        gradients[:, dial_index] = (xrv_up - xrv_down) / (2 * cf.GRAD_STEP_SD)
+    return gradients
 
 
 def prescriptions(group, gradients, shifts, cells):
@@ -129,32 +139,33 @@ def prescriptions(group, gradients, shifts, cells):
     ranking on it would just surface the largest cell for every hitter; the delta says
     where THIS situation differs from how he normally hits.
     """
-    overall = gradients.mean(axis=0)
+    baseline_gradient = gradients.mean(axis=0)
     rows = []
     for axis, labels in cells.items():
         for cell in pd.unique(labels):
-            mask = labels == cell
-            n_cell = int(mask.sum())
-            if n_cell < cf.MIN_CELL_SWINGS:
+            in_cell = labels == cell
+            n_cell_swings = int(in_cell.sum())
+            if n_cell_swings < cf.MIN_CELL_SWINGS:
                 continue
-            for j, dial in enumerate(SHAPE):
-                grad = float(gradients[mask, j].mean())
-                delta = grad - float(overall[j])
-                shift = float(shifts[mask, j].mean())
-                season_swings = n_cell / N_SEASONS
+            season_swings = n_cell_swings / N_SEASONS
+            for dial_index, dial in enumerate(SHAPE):
+                cell_gradient = float(gradients[in_cell, dial_index].mean())
+                situational_gradient = cell_gradient - float(baseline_gradient[dial_index])
+                fitted_shift = float(shifts[in_cell, dial_index].mean())
                 rows.append({
                     "batter_id": group["batter_id"].iloc[0],
                     "batter_stand": group["batter_stand"].iloc[0],
                     "axis": axis,
                     "cell": cell,
                     "dial": dial,
-                    "n_swings": n_cell,
-                    "grad_runs_per_sd": grad,
-                    "grad_delta_runs_per_sd": delta,
-                    "shift_sd": shift,
-                    "runs_from_shift": grad * shift * season_swings,
-                    "runs_per_quarter_sd": grad * cf.POLICY_STEP_SD * season_swings,
-                    "situational_runs_per_quarter_sd": delta * cf.POLICY_STEP_SD * season_swings,
+                    "n_swings": n_cell_swings,
+                    "grad_runs_per_sd": cell_gradient,
+                    "grad_delta_runs_per_sd": situational_gradient,
+                    "shift_sd": fitted_shift,
+                    "runs_from_shift": cell_gradient * fitted_shift * season_swings,
+                    "runs_per_quarter_sd": cell_gradient * cf.POLICY_STEP_SD * season_swings,
+                    "situational_runs_per_quarter_sd":
+                        situational_gradient * cf.POLICY_STEP_SD * season_swings,
                 })
     return rows
 
@@ -182,23 +193,21 @@ def verify_scoring(models, run_value_tables, swings, n_units=5):
     This is the category-alignment guard. If pitch_type codes were misaligned the
     deviation would be large and obvious.
     """
-    units = list(dict.fromkeys(zip(swings["batter_id"], swings["batter_stand"])))[:n_units]
+    all_units = dict.fromkeys(zip(swings["batter_id"], swings["batter_stand"]))
+    units = list(all_units)[:n_units]
     published = pd.read_parquet(DATA / "xrv_swings.parquet", columns=["play_id", "xrv"])
-    worst = 0.0
+    worst_deviation = 0.0
     for batter_id, stand in units:
         group = swings[(swings["batter_id"] == batter_id)
                        & (swings["batter_stand"] == stand)]
-        got = score_shapes(models, run_value_tables, group, group[SHAPE].to_numpy(float))
-        merged = (pd.DataFrame({"play_id": group["play_id"].to_numpy(), "got": got})
-                  .merge(published, on="play_id", how="inner"))
+        scored = score_shapes(models, run_value_tables, group, group[SHAPE].to_numpy(float))
+        rescored = pd.DataFrame({"play_id": group["play_id"].to_numpy(), "got": scored})
+        merged = rescored.merge(published, on="play_id", how="inner")
         if merged.empty:
             raise AssertionError(f"no play_id overlap for {batter_id} {stand}")
-        worst = max(worst, float((merged["got"] - merged["xrv"]).abs().max()))
-    return worst
-
-
-N_SEASONS = len(SEASONS)
-AXIS_NAMES = list(cf.AXES)
+        deviation = float((merged["got"] - merged["xrv"]).abs().max())
+        worst_deviation = max(worst_deviation, deviation)
+    return worst_deviation
 
 
 def unit_fit(group, scale, shuffle_seed=None):
@@ -214,16 +223,16 @@ def unit_fit(group, scale, shuffle_seed=None):
     if shuffle_seed is not None:
         rng = np.random.default_rng(shuffle_seed)
         group = group.copy()
-        group[cf.SITUATION_COLS] = (
-            group[cf.SITUATION_COLS].to_numpy()[rng.permutation(len(group))])
+        shuffled_rows = group[cf.SITUATION_COLS].to_numpy()[rng.permutation(len(group))]
+        group[cf.SITUATION_COLS] = shuffled_rows
 
     design, axis_slices = cf.build_design(group, location_design(group),
                                           pc.control_matrix(group))
     observed = group[SHAPE].to_numpy(float)
     fits = cf.crossfit_shapes(design, observed)
     shape_actual = cf.predict_oof(design, fits, len(SHAPE))
-    shape_cf = cf.predict_oof(cf.desituate(design, axis_slices, AXIS_NAMES),
-                              fits, len(SHAPE))
+    design_cf = cf.desituate(design, axis_slices, AXIS_NAMES)
+    shape_cf = cf.predict_oof(design_cf, fits, len(SHAPE))
     centered, axis_rows = cf.centered_situation(group)
     displacement = (shape_actual - shape_cf) / scale
     return {
@@ -248,10 +257,7 @@ def unit_record(models, run_value_tables, fit, scale, blocks=None, index=None,
     group, shape_cf = fit["group"], fit["shape_cf"]
     shape_actual, observed = fit["shape_actual"], fit["observed"]
     centered, displacement = fit["centered"], fit["displacement"]
-    scale = np.asarray([scale[f] for f in SHAPE], dtype=float)
-
-    def score_disp(disp_sd):
-        return score_shapes(models, run_value_tables, group, shape_cf + disp_sd * scale)
+    scale_vector = np.asarray([scale[feature] for feature in SHAPE], dtype=float)
 
     xrv_cf = score_shapes(models, run_value_tables, group, shape_cf)
     xrv_actual = score_shapes(models, run_value_tables, group, shape_actual)
@@ -273,72 +279,88 @@ def unit_record(models, run_value_tables, fit, scale, blocks=None, index=None,
     # individual" rather than one arbitrary hitter.
     if blocks is not None and n_replacements:
         rng = np.random.default_rng(cf.SEED + index)
-        picks = rng.choice([j for j in range(len(blocks)) if j != index],
-                           size=min(n_replacements, len(blocks) - 1), replace=False)
-        full = np.zeros(len(group))
-        by_axis = {axis: np.zeros(len(group)) for axis in AXIS_NAMES}
-        for j in picks:
-            full += score_disp(centered @ blocks[j])
+        other_units = [j for j in range(len(blocks)) if j != index]
+        n_draws = min(n_replacements, len(blocks) - 1)
+        replacement_indices = rng.choice(other_units, size=n_draws, replace=False)
+
+        replacement_xrv = np.zeros(len(group))
+        replacement_xrv_by_axis = {axis: np.zeros(len(group)) for axis in AXIS_NAMES}
+        for j in replacement_indices:
+            replacement_xrv += _score_displacement(
+                models, run_value_tables, group, shape_cf, centered @ blocks[j], scale_vector)
             for axis in AXIS_NAMES:
                 swapped = cf.swap_axis(fit["policy"], blocks[j], fit["axis_rows"], axis)
-                by_axis[axis] += score_disp(centered @ swapped)
-        per_swing_delta = xrv_actual - full / len(picks)
-        record["n_replacements"] = len(picks)
+                replacement_xrv_by_axis[axis] += _score_displacement(
+                    models, run_value_tables, group, shape_cf, centered @ swapped, scale_vector)
+
+        n_picks = len(replacement_indices)
+        per_swing_delta = xrv_actual - replacement_xrv / n_picks
+        record["n_replacements"] = n_picks
         record["runs_total"] = float(per_swing_delta.sum() / N_SEASONS)
         record["runs_total_2k"] = float(per_swing_delta[is_two_strike].sum() / N_SEASONS)
         record["runs_per_swing"] = float(per_swing_delta.mean())
         axis_sum = 0.0
         for axis in AXIS_NAMES:
-            value = float((xrv_actual - by_axis[axis] / len(picks)).sum() / N_SEASONS)
-            record[f"runs_{axis}"] = value
-            axis_sum += value
+            axis_delta = xrv_actual - replacement_xrv_by_axis[axis] / n_picks
+            axis_runs = float(axis_delta.sum() / N_SEASONS)
+            record[f"runs_{axis}"] = axis_runs
+            axis_sum += axis_runs
         record["runs_interaction"] = record["runs_total"] - axis_sum
 
     if headline_only:
         return record
 
-    def season_runs(shape_matrix, baseline):
-        return float((score_shapes(models, run_value_tables, group, shape_matrix)
-                      - baseline).sum() / N_SEASONS)
-
+    # Each axis on its own: de-situate the other two and leave this one live.
     axis_shapes = {}
     for axis in AXIS_NAMES:
-        others = [a for a in AXIS_NAMES if a != axis]
-        design_one = cf.desituate(fit["design"], fit["axis_slices"], others)
-        axis_shapes[axis] = cf.predict_oof(design_one, fit["fits"], len(SHAPE))
+        other_axes = [a for a in AXIS_NAMES if a != axis]
+        design_one_axis = cf.desituate(fit["design"], fit["axis_slices"], other_axes)
+        axis_shapes[axis] = cf.predict_oof(design_one_axis, fit["fits"], len(SHAPE))
 
     # The observed-percentile envelope stays as a hard rail. It is no longer the binding
     # constraint — it is built from observed shapes, whose execution noise (~1.5 SD) dwarfs
     # the situational displacement (~0.37 SD) being blended, so it almost never rejects.
-    env = cf.envelope(observed)
-    admissible = cf.admissible_alphas(shape_cf, shape_actual, env)
-    curve = {a: season_runs(cf.blend(shape_cf, shape_actual, a), xrv_cf) for a in admissible}
-    peak = max(curve, key=curve.get) if curve else float("nan")
-    record["alpha_peak_unconstrained"] = peak
+    shape_envelope = cf.envelope(observed)
+    admissible = cf.admissible_alphas(shape_cf, shape_actual, shape_envelope)
+    alpha_curve = {}
+    for alpha in admissible:
+        blended_shape = cf.blend(shape_cf, shape_actual, alpha)
+        alpha_curve[alpha] = _season_runs(
+            models, run_value_tables, group, blended_shape, xrv_cf)
+    peak_alpha = max(alpha_curve, key=alpha_curve.get) if alpha_curve else float("nan")
+    record["alpha_peak_unconstrained"] = peak_alpha
     record["alpha_peak_at_boundary"] = bool(
-        admissible and peak in (min(admissible), max(admissible))
+        admissible and peak_alpha in (min(admissible), max(admissible))
     )
 
     for axis in AXIS_NAMES:
-        axis_curve = {}
-        for a in cf.AXIS_ALPHA_GRID:
-            shape_a = cf.axis_blend(shape_actual, axis_shapes[axis], shape_cf, a)
-            if cf.fraction_outside(shape_a, env) < cf.MAX_OUTSIDE:
-                axis_curve[a] = season_runs(shape_a, xrv_cf)
-        record[f"alpha_star_{axis}"] = (max(axis_curve, key=axis_curve.get)
-                                        if axis_curve else float("nan"))
-        # Flatness detector: a near-zero range means the argmax is noise, not a policy.
-        record[f"runs_range_{axis}"] = (max(axis_curve.values()) - min(axis_curve.values())
-                                        if axis_curve else float("nan"))
+        axis_alpha_curve = {}
+        for alpha in cf.AXIS_ALPHA_GRID:
+            blended_shape = cf.axis_blend(shape_actual, axis_shapes[axis], shape_cf, alpha)
+            if cf.fraction_outside(blended_shape, shape_envelope) < cf.MAX_OUTSIDE:
+                axis_alpha_curve[alpha] = _season_runs(
+                    models, run_value_tables, group, blended_shape, xrv_cf)
+        if axis_alpha_curve:
+            record[f"alpha_star_{axis}"] = max(axis_alpha_curve, key=axis_alpha_curve.get)
+            # Flatness detector: a near-zero range means the argmax is noise, not a policy.
+            record[f"runs_range_{axis}"] = (max(axis_alpha_curve.values())
+                                            - min(axis_alpha_curve.values()))
+        else:
+            record[f"alpha_star_{axis}"] = float("nan")
+            record[f"runs_range_{axis}"] = float("nan")
 
-    lo = season_runs(cf.blend(shape_cf, shape_actual, 0.9), xrv_cf)
-    hi = season_runs(cf.blend(shape_cf, shape_actual, 1.1), xrv_cf)
-    record["marginal_runs_per_alpha"] = (hi - lo) / 0.2
+    # Slope of the value curve at his current level of modulation (alpha = 1).
+    runs_at_alpha_090 = _season_runs(models, run_value_tables, group,
+                                     cf.blend(shape_cf, shape_actual, 0.9), xrv_cf)
+    runs_at_alpha_110 = _season_runs(models, run_value_tables, group,
+                                     cf.blend(shape_cf, shape_actual, 1.1), xrv_cf)
+    record["marginal_runs_per_alpha"] = (runs_at_alpha_110 - runs_at_alpha_090) / 0.2
 
-    gradients = shape_gradients(models, run_value_tables, group, observed, scale)
-    record["_alpha_curve"] = curve
+    gradients = shape_gradients(models, run_value_tables, group, observed, scale_vector)
+    situational_shift = (shape_actual - shape_cf) / scale_vector
+    record["_alpha_curve"] = alpha_curve
     record["_prescriptions"] = prescriptions(
-        group, gradients, (shape_actual - shape_cf) / scale, cf.cell_labels(group))
+        group, gradients, situational_shift, cf.cell_labels(group))
     return record
 
 
@@ -351,14 +373,15 @@ def axis_top_levers(gradients):
     prescriptions entirely. Values stay signed — negative means move the dial down.
     """
     ranked = gradients.assign(gain=gradients["situational_runs_per_quarter_sd"].abs())
-    out = None
-    for axis, block in ranked.groupby("axis"):
-        best = block.loc[block.groupby(KEY)["gain"].idxmax()]
-        levers = best[KEY].copy()
-        levers[f"top_lever_{axis}"] = (best["cell"] + "/" + best["dial"]).to_numpy()
-        levers[f"top_lever_{axis}_runs"] = best["situational_runs_per_quarter_sd"].to_numpy()
-        out = levers if out is None else out.merge(levers, on=KEY, how="outer")
-    return out
+    top_levers = None
+    for axis, axis_block in ranked.groupby("axis"):
+        best = axis_block.loc[axis_block.groupby(KEY)["gain"].idxmax()]
+        axis_levers = best[KEY].copy()
+        axis_levers[f"top_lever_{axis}"] = (best["cell"] + "/" + best["dial"]).to_numpy()
+        axis_levers[f"top_lever_{axis}_runs"] = best["situational_runs_per_quarter_sd"].to_numpy()
+        top_levers = (axis_levers if top_levers is None
+                      else top_levers.merge(axis_levers, on=KEY, how="outer"))
+    return top_levers
 
 
 def main():
@@ -376,32 +399,34 @@ def main():
           f"{swings.groupby(KEY, observed=True).ngroups} units")
 
     if args.verify:
-        worst = verify_scoring(models, run_value_tables, swings)
-        print(f"max |scored - published xrv| = {worst:.3e}")
-        print("PASS" if worst < 1e-5 else "FAIL — pitch_type categories misaligned")
+        worst_deviation = verify_scoring(models, run_value_tables, swings)
+        print(f"max |scored - published xrv| = {worst_deviation:.3e}")
+        print("PASS" if worst_deviation < 1e-5 else "FAIL — pitch_type categories misaligned")
         return
 
     reference = load_policy_reference(swings)
     scale = reference["shape_sd"]
+    scale_vector = np.asarray([scale[feature] for feature in SHAPE], float)
     groups = list(swings.groupby(KEY, observed=True, sort=False))
     if args.limit:
         groups = groups[:args.limit]
 
     print(f"pass 1: fitting {len(groups)} unit policies")
-    fitted = [unit_fit(group.reset_index(drop=True), np.asarray(
-        [scale[f] for f in SHAPE], float)) for _, group in groups]
-    blocks = [f["policy"] for f in fitted]
+    fitted = []
+    for _, group in groups:
+        fitted.append(unit_fit(group.reset_index(drop=True), scale_vector))
+    blocks = [fit["policy"] for fit in fitted]
 
     print(f"pass 2: scoring arms ({cf.N_REPLACEMENTS} replacements per unit)")
-    records, curves, gradient_rows = [], [], []
+    records, alpha_curves, gradient_rows = [], [], []
     for i, fit in enumerate(fitted):
         record = unit_record(models, run_value_tables, fit, scale, blocks, i)
-        curves.append(record.pop("_alpha_curve"))
+        alpha_curves.append(record.pop("_alpha_curve"))
         gradient_rows.extend(record.pop("_prescriptions"))
         records.append(record)
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{len(fitted)} units")
-    df = pd.DataFrame(records)
+    unit_table = pd.DataFrame(records)
 
     # Admit only levels of situational modulation major-league hitters actually sustain.
     # The cap is a quantile of FITTED displacement, so it is tied to the shape design and
@@ -412,46 +437,50 @@ def main():
         reference["displacement_cap"] = None
     if reference["displacement_cap"] is None:
         reference["displacement_cap"] = float(
-            df["displacement_sd"].quantile(cf.POLICY_QUANTILE))
-    cap = reference["displacement_cap"]
+            unit_table["displacement_sd"].quantile(cf.POLICY_QUANTILE))
+    displacement_cap = reference["displacement_cap"]
 
-    policy, gain = [], []
-    for d_u, curve in zip(df["displacement_sd"], curves):
-        allowed = {a: v for a, v in curve.items() if a in cf.policy_alphas(d_u, cap)}
-        best = max(allowed, key=allowed.get) if allowed else float("nan")
-        policy.append(best)
-        gain.append(allowed[best] - curve[1.0]
-                    if allowed and 1.0 in curve else float("nan"))
-    df["alpha_star_policy"] = policy
-    df["runs_at_alpha_star"] = gain
-    df["runs_at_alpha_star_per_swing"] = df["runs_at_alpha_star"] * N_SEASONS / df["n_swings"]
+    alpha_star_policy, runs_at_alpha_star = [], []
+    for unit_displacement_sd, curve in zip(unit_table["displacement_sd"], alpha_curves):
+        capped_alphas = cf.policy_alphas(unit_displacement_sd, displacement_cap)
+        allowed = {alpha: runs for alpha, runs in curve.items() if alpha in capped_alphas}
+        best_alpha = max(allowed, key=allowed.get) if allowed else float("nan")
+        alpha_star_policy.append(best_alpha)
+        # Gain is measured against alpha = 1.0, what he already does.
+        runs_at_alpha_star.append(allowed[best_alpha] - curve[1.0]
+                                  if allowed and 1.0 in curve else float("nan"))
+    unit_table["alpha_star_policy"] = alpha_star_policy
+    unit_table["runs_at_alpha_star"] = runs_at_alpha_star
+    unit_table["runs_at_alpha_star_per_swing"] = (
+        unit_table["runs_at_alpha_star"] * N_SEASONS / unit_table["n_swings"])
 
-    adj = pd.read_parquet(DATA / "adjustability.parquet", columns=KEY + [
+    adjustability = pd.read_parquet(DATA / "adjustability.parquet", columns=KEY + [
         "label", "adjustability", "adj_count", "adjustability_plus",
         "adjustability_pctile",
         "twostrike_rv_penalty", "gamestate_rv_penalty", "platoon_rv_penalty",
     ]).merge(compute_swing_plus(), on=KEY, how="left")
     cards = pd.read_parquet(DATA / "shape_cards.parquet",
                             columns=KEY + ["role", "archetype_name", "grade"])
-    primary = (cards[cards["role"] == "primary"][KEY + ["archetype_name", "grade"]]
-               .rename(columns={"grade": "primary_grade"}))
-    rep = pd.read_parquet(DATA / "repertoire_scores.parquet",
-                          columns=KEY + ["repertoire_pctile", "effective_shapes"])
+    primary_shape = (cards[cards["role"] == "primary"][KEY + ["archetype_name", "grade"]]
+                     .rename(columns={"grade": "primary_grade"}))
+    repertoire = pd.read_parquet(DATA / "repertoire_scores.parquet",
+                                 columns=KEY + ["repertoire_pctile", "effective_shapes"])
 
-    df = (df.merge(adj, on=KEY, how="left")
-            .merge(primary, on=KEY, how="left")
-            .merge(rep, on=KEY, how="left"))
+    unit_table = (unit_table.merge(adjustability, on=KEY, how="left")
+                            .merge(primary_shape, on=KEY, how="left")
+                            .merge(repertoire, on=KEY, how="left"))
 
     suffix = "_subset" if args.limit else ""
-    gradients = pd.DataFrame(gradient_rows).merge(df[KEY + ["label"]], on=KEY, how="left")
-    df = df.merge(axis_top_levers(gradients), on=KEY, how="left")
+    gradients = (pd.DataFrame(gradient_rows)
+                 .merge(unit_table[KEY + ["label"]], on=KEY, how="left"))
+    unit_table = unit_table.merge(axis_top_levers(gradients), on=KEY, how="left")
 
-    out = DATA / f"adjustability_value{suffix}.parquet"
-    grad_out = DATA / f"adjustability_gradients{suffix}.parquet"
-    df.to_parquet(out, index=False)
-    gradients.to_parquet(grad_out, index=False)
-    print(f"\nWrote {len(df)} rows -> {out}")
-    print(f"Wrote {len(gradients)} rows -> {grad_out}")
+    value_path = DATA / f"adjustability_value{suffix}.parquet"
+    gradient_path = DATA / f"adjustability_gradients{suffix}.parquet"
+    unit_table.to_parquet(value_path, index=False)
+    gradients.to_parquet(gradient_path, index=False)
+    print(f"\nWrote {len(unit_table)} rows -> {value_path}")
+    print(f"Wrote {len(gradients)} rows -> {gradient_path}")
 
     if not args.limit and (args.repeg or not POLICY_REF.exists()):
         POLICY_REF.write_text(json.dumps(reference, indent=2) + "\n")
@@ -460,36 +489,41 @@ def main():
     print("\n=== Season runs vs a replacement hitter's policy ===")
     for col in ["runs_total", "runs_count", "runs_gamestate", "runs_platoon",
                 "runs_interaction", "runs_total_2k", "runs_vs_desituated"]:
-        s = df[col]
-        print(f"  {col:<20} mean={s.mean():+6.2f}  median={s.median():+6.2f}  "
-              f"sd={s.std():5.2f}  %pos={100 * (s > 0).mean():5.1f}  "
-              f"range=[{s.min():+6.1f}, {s.max():+6.1f}]")
-    print(f"\n  corr(runs_total, n_swings)  = {df['runs_total'].corr(df['n_swings']):+.3f}")
-    print(f"  corr(runs_total, swing_plus) = {df['runs_total'].corr(df['swing_plus']):+.3f}")
-    resid = df["runs_interaction"].abs()
-    print(f"\n  |interaction| mean={resid.mean():.2f}  max={resid.max():.2f}  "
-          f"median % of |total|={100 * (resid / df['runs_total'].abs().clip(lower=0.1)).median():.0f}%")
+        values = unit_table[col]
+        print(f"  {col:<20} mean={values.mean():+6.2f}  median={values.median():+6.2f}  "
+              f"sd={values.std():5.2f}  %pos={100 * (values > 0).mean():5.1f}  "
+              f"range=[{values.min():+6.1f}, {values.max():+6.1f}]")
+    corr_n_swings = unit_table["runs_total"].corr(unit_table["n_swings"])
+    corr_swing_plus = unit_table["runs_total"].corr(unit_table["swing_plus"])
+    print(f"\n  corr(runs_total, n_swings)  = {corr_n_swings:+.3f}")
+    print(f"  corr(runs_total, swing_plus) = {corr_swing_plus:+.3f}")
+    interaction = unit_table["runs_interaction"].abs()
+    total = unit_table["runs_total"].abs().clip(lower=0.1)
+    print(f"\n  |interaction| mean={interaction.mean():.2f}  max={interaction.max():.2f}  "
+          f"median % of |total|={100 * (interaction / total).median():.0f}%")
 
     print("\n=== Policy ===")
-    print(f"  displacement cap Q{100 * cf.POLICY_QUANTILE:.0f} = {cap:.3f} SD")
+    print(f"  displacement cap Q{100 * cf.POLICY_QUANTILE:.0f} = {displacement_cap:.3f} SD")
     for col in ["displacement_sd", "alpha_peak_unconstrained", "alpha_star_policy",
                 "runs_at_alpha_star", "runs_at_alpha_star_per_swing"]:
-        s = df[col]
-        print(f"  {col:<28} mean={s.mean():+7.3f}  median={s.median():+7.3f}")
-    print(f"  peak still at a grid edge: {100 * df['alpha_peak_at_boundary'].mean():.0f}% of units")
+        values = unit_table[col]
+        print(f"  {col:<28} mean={values.mean():+7.3f}  median={values.median():+7.3f}")
+    at_boundary = 100 * unit_table["alpha_peak_at_boundary"].mean()
+    print(f"  peak still at a grid edge: {at_boundary:.0f}% of units")
     for axis in AXIS_NAMES:
-        print(f"  alpha_star_{axis:<10} median={df[f'alpha_star_{axis}'].median():.2f}  "
-              f"runs range median={df[f'runs_range_{axis}'].median():.3f}")
+        print(f"  alpha_star_{axis:<10} median={unit_table[f'alpha_star_{axis}'].median():.2f}  "
+              f"runs range median={unit_table[f'runs_range_{axis}'].median():.3f}")
 
     print("\n=== Situational gradient (cohort mean |cell - own baseline|, runs/swing per SD) ===")
-    pivot = (gradients.assign(g=gradients["grad_delta_runs_per_sd"].abs())
-             .pivot_table(index="dial", columns="cell", values="g", aggfunc="mean"))
-    print(pivot.round(4).to_string())
+    with_abs = gradients.assign(g=gradients["grad_delta_runs_per_sd"].abs())
+    gradient_pivot = with_abs.pivot_table(index="dial", columns="cell", values="g", aggfunc="mean")
+    print(gradient_pivot.round(4).to_string())
 
     print("\n=== Spot check ===")
-    spot = df[df["label"].str.contains("Judge|Arraez|Schwarber|Teoscar", na=False)]
-    print(spot[["label", "runs_total", "alpha_star_policy", "runs_at_alpha_star"]
-               + [f"top_lever_{a}" for a in AXIS_NAMES]].to_string(index=False))
+    spot_check = unit_table[unit_table["label"]
+                            .str.contains("Judge|Arraez|Schwarber|Teoscar", na=False)]
+    print(spot_check[["label", "runs_total", "alpha_star_policy", "runs_at_alpha_star"]
+                     + [f"top_lever_{a}" for a in AXIS_NAMES]].to_string(index=False))
 
 
 if __name__ == "__main__":

@@ -172,7 +172,7 @@ def write_catalog(repertoire, feature_sds):
                  "mediocre 5-shape one. **It is purely descriptive — it says nothing about whether "
                  "the shapes are good or valuable.** k=1 (single-shape) hitters score the floor (0). The "
                  "scale (feature SDs + the `50+10·z` constants + the percentile grid) is **pegged to the "
-                 "2024-25 baseline** (`src/repertoire_reference.json`) so repertoire_plus / pctile stay "
+                 "2024-25 baseline** (`src/uncommited/repertoire_reference.json`) so repertoire_plus / pctile stay "
                  "comparable when later seasons are added.\n")
     lines.append(f"- Cohort: **{len(repertoire)} (batter, stand) units**")
     lines.append(f"- **Lead with `repertoire_pctile` (0-100 rank).** {int((repertoire.k == 1).sum())} single-shape "
