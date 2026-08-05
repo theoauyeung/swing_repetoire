@@ -1,4 +1,6 @@
-"""Pre-aggregate large parquets into small lookup files for leaderboard_table.R.
+"""Boils the big swing files down to small per-hitter summaries so the R leaderboard script can
+read them. R chokes trying to open the full files on this machine, so all the counting happens
+here in Python first.
 
 Arrow's read_parquet hangs on macOS (errno 89) when multiple large files are open
 simultaneously. This script does all the heavy lifting in Python/DuckDB and writes

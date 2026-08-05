@@ -1,10 +1,9 @@
-"""Validation for the counterfactual adjustment-value accounting.
+"""Stress-tests the adjustment-value numbers before anyone puts them on a leaderboard. A
+swing that never happened has no real outcome attached, so the runs come from a model, and
+a model will happily hand back a number even when there is nothing there.
 
-The design accepts xRV as the value function because a counterfactual swing has no
-realized delta_run_exp. That makes validation load-bearing rather than a formality.
-
-Pre-committed failure condition: if the predictive test is null AND the placebo does not
-collapse, runs_total is a model artifact and no leaderboard ships from it.
+Three checks: shuffle the situations and confirm the score collapses, see whether it predicts
+real production, and see whether a hitter scores the same in 2024 and 2025.
 
 Run: python src/adjustability_value_validate.py
 """
@@ -73,7 +72,8 @@ MIN_SEASON_SWINGS = 150
 # Everything the prescription rests on. runs_total is the accounting headline; the rest are
 # the policy layer, whose reliability the design pre-commits to before publication.
 RELIABILITY_COLS = [
-    "runs_total", "runs_per_swing", "marginal_runs_per_alpha", "displacement_sd",
+    "runs_total", "runs_vs_desituated", "runs_per_swing",
+    "marginal_runs_per_alpha", "displacement_sd",
     "alpha_peak_unconstrained", "alpha_star_policy", "runs_at_alpha_star_per_swing",
 ]
 GRADIENT_CELL = ("count", "2 strikes")
@@ -82,14 +82,18 @@ GRADIENT_CELL = ("count", "2 strikes")
 def _season_half(op, cf, models, run_value_tables, half, scale):
     """Full re-estimation inside one season: records, plus that season's own policy cap.
 
-    The cap is recomputed from this half's own displacement distribution rather than
-    borrowed from the pooled run — otherwise the two halves would share an input and the
-    correlation would be inflated.
+    The cap and the replacement pool are both rebuilt from this half alone rather than borrowed
+    from the pooled run — otherwise the two halves would share an input and the correlation
+    would be inflated.
     """
+    scale_vec = np.asarray([scale[f] for f in op.SHAPE], float)
+    fits = [op.unit_fit(group.reset_index(drop=True), scale_vec)
+            for _, group in half.groupby(KEY, observed=True, sort=False)]
+    blocks = [f["policy"] for f in fits]
+
     records, curves = [], []
-    for _, group in half.groupby(KEY, observed=True, sort=False):
-        record = op.unit_record(models, run_value_tables, group.reset_index(drop=True),
-                                scale=scale)
+    for i, fit in enumerate(fits):
+        record = op.unit_record(models, run_value_tables, fit, scale, blocks, i)
         curves.append(record.pop("_alpha_curve"))
         for row in record.pop("_prescriptions"):
             if (row["axis"], row["cell"]) == GRADIENT_CELL:
@@ -175,21 +179,34 @@ def gradient_summary():
 
 
 def placebo(n_units=60, seed=11):
-    """Recompute runs_total on within-unit shuffled situation labels."""
+    """Recompute the headline on within-unit shuffled situation labels.
+
+    Run on `runs_vs_desituated`, not on `runs_total`: shuffling destroys the situation-shape
+    relationship in the unit being tested but the replacement blocks come from unshuffled hitters,
+    so a replacement-benchmarked placebo would be a comparison between two different worlds. The
+    de-situated arm is self-contained and is what this test was designed for. The
+    aim-destroying placebo for the replacement benchmark lives in experiments/directional_placebo.py.
+    """
     import adjustability_value as op
+    import numpy as np
 
     models = op.load_models()
     run_value_tables = op.xrv.load_run_value_tables()
     swings = op.load_swings()
+    reference = op.load_policy_reference(swings)
+    scale = np.asarray([reference["shape_sd"][f] for f in op.SHAPE], float)
     groups = list(swings.groupby(KEY, observed=True, sort=False))[:n_units]
+
+    def headline(group, shuffle_seed=None):
+        fit = op.unit_fit(group, scale, shuffle_seed=shuffle_seed)
+        return op.unit_record(models, run_value_tables, fit, reference["shape_sd"],
+                              headline_only=True)["runs_vs_desituated"]
 
     real, fake = [], []
     for i, (_, group) in enumerate(groups):
         group = group.reset_index(drop=True)
-        real.append(op.unit_record(models, run_value_tables, group,
-                                   headline_only=True)["runs_total"])
-        fake.append(op.unit_record(models, run_value_tables, group, headline_only=True,
-                                   shuffle_seed=seed + i)["runs_total"])
+        real.append(headline(group))
+        fake.append(headline(group, shuffle_seed=seed + i))
     return pd.DataFrame({"real": real, "placebo": fake})
 
 

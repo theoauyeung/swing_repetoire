@@ -1,4 +1,6 @@
-"""M2 prep: filter to competitive tracked swings and build the model-ready swing table.
+"""Throws out the swings that aren't real swings — bunts, checked swings, emergency hacks — and
+keeps the ones a hitter actually meant. Everything downstream assumes he was trying to hit the
+ball hard, so a defensive flail left in the data would read as a deliberate shape change.
 
 Competitive swing (operational definition, no DB flag exists):
   - bat-tracked (5 shape features present)

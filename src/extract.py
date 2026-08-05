@@ -1,4 +1,6 @@
-"""M1 extract: pull all MLB competitive swings (2024-2026) with bat-tracking columns.
+"""Pulls every MLB swing from 2024 on out of the database, with the bat-tracking measurements
+attached where they exist. This is the raw material for everything else — nothing here filters
+or judges, it just gets the pitches out of the warehouse and onto disk.
 
 Pulls the superset of *all* swings (is_swing=1), not just bat-tracked ones, so the
 missingness audit can compare tracked vs untracked. Bat-tracking columns are null where

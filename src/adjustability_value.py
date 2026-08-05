@@ -1,10 +1,31 @@
-"""Optimal adjustment policy — counterfactual value of situational swing changes.
+"""Scores whether a hitter's situational adjustments are actually worth runs. On every pitch
+he saw, we swap in the way a randomly picked other hitter would have adjusted, re-grade both
+swings, and add up the difference over a season.
 
-For every swing we ask: what would this hitter's swing have looked like on this exact
-pitch if the count, base state and matchup had not moved him? Price both the actual and
-the counterfactual swing through xRV, difference, and sum over the season.
+That comparison is the whole point. Grading him against "not adjusting at all" made 96% of the
+league look good at it, which is a benchmark problem, not a finding. Grading him against
+another real hitter puts about half the league on each side.
 
-    value = sum over swings of [ xRV(actual swing) - xRV(counterfactual swing) ]
+For every swing we ask what this hitter's swing would have looked like on this exact
+pitch under a DIFFERENT situational policy, and price both through xRV.
+
+    runs_total = sum over swings of [ xRV(his adjustment) - xRV(a replacement hitter's) ]
+
+The benchmark is another randomly drawn hitter's situation->shape policy applied to his
+situations, averaged over N_REPLACEMENTS draws. "Replacement" here means a randomly drawn
+big-leaguer from this same cohort, NOT WAR's replacement-level talent — the bar is an
+average major-league adjuster, not a fringe one. The earlier benchmark was his own de-situated
+swing — "adjusting vs not adjusting at all" — which can only point one way whenever the
+adjustment tracks the pitch: 93.4% of units scored positive, the ranking correlated
++0.63 with playing time, and elite hitters sat near the bottom. That quantity survives as
+the diagnostic `runs_vs_desituated`; it is an accounting decomposition, not a skill
+measure. A replacement is precision-matched — his policy block carries the same estimation
+noise as the hitter's own — so roughly half the cohort scores negative by construction.
+
+Pitch characteristics (velocity, movement, spin, release) are controls in the shape
+regression alongside location and pitch_group. Without them the situation dummies absorb
+the pitch mix that comes with the count and the swing's mechanical reaction to it is
+scored as volition.
 
 On top of that accounting sit two prescriptive layers. The alpha scan asks HOW MUCH to
 modulate, capped at the level a 90th-percentile league modulator sustains. The per-dial
@@ -31,6 +52,7 @@ DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import counterfactual as cf                                          # noqa: E402
+import pitch_controls as pc                                          # noqa: E402
 import xRV_model as xrv                                              # noqa: E402
 from adjustability import KEY, MIN_SWINGS, SEASONS                   # noqa: E402
 from adjustability import add_context, location_design               # noqa: E402
@@ -38,7 +60,7 @@ from adjustability import add_context, location_design               # noqa: E40
 SHAPE = xrv.SHAPE_FEATURES
 POLICY_REF = ROOT / "src" / "adjustability_policy_reference.json"
 LOAD_COLS = KEY + [
-    "play_id", "game_year", "batter_full_name", "balls", "strikes", "outs_when_up",
+    "play_id", "game_pk", "game_year", "batter_full_name", "balls", "strikes", "outs_when_up",
     "plate_x", "plate_z", "sz_top", "sz_bot", "pitch_type", "pitcher_throws",
     "on_1b_id", "on_2b_id", "on_3b_id", "delta_run_exp", "woba",
 ] + SHAPE
@@ -55,7 +77,7 @@ def load_models():
     return models
 
 
-def load_swings():
+def load_swings(with_pitch_chars=True):
     """2024-25 swings for qualifying units, with pitch_type categories fixed league-wide.
 
     The cast happens once on the full frame. build_features calls astype("category"),
@@ -66,6 +88,8 @@ def load_swings():
     df = df[df["game_year"].isin(SEASONS)]
     df["pitch_type"] = df["pitch_type"].astype("category")
     df = add_context(df).dropna(subset=SHAPE)
+    if with_pitch_chars:
+        df = pc.join_pitch_chars(df)
     sizes = df.groupby(KEY, observed=True)[SHAPE[0]].transform("size")
     return df[sizes >= MIN_SWINGS].reset_index(drop=True)
 
@@ -187,71 +211,111 @@ N_SEASONS = len(SEASONS)
 AXIS_NAMES = list(cf.AXES)
 
 
-def unit_record(models, run_value_tables, group, scale=None,
-                headline_only=False, shuffle_seed=None):
-    """One unit's counterfactual run accounting, alpha scan and per-dial prescriptions.
+def unit_fit(group, scale, shuffle_seed=None):
+    """Pass 1: this unit's cross-fitted shapes and its situation->shape policy block.
 
-    Returns the record plus two private keys the caller must pop: `_alpha_curve` (needed
-    only after the cohort-wide displacement cap is known) and `_prescriptions` (long rows
-    for the gradient parquet).
-
-    headline_only stops after the two-arm headline, skipping everything that needs extra
-    scoring passes. The split-half and placebo checks need only `runs_total`.
+    The policy block maps a CENTERED situation row to a displacement in league-SD units,
+    so it is conformable and comparable across hitters with different dial ranges — that
+    is what makes it transferable to another hitter's situations in pass 2.
 
     shuffle_seed permutes the situation columns within the unit, destroying any real
     situation-shape relationship while preserving marginals — the placebo.
     """
     if shuffle_seed is not None:
         rng = np.random.default_rng(shuffle_seed)
-        situation_cols = [c for cols in cf.AXES.values() for c in cols]
         group = group.copy()
-        group[situation_cols] = group[situation_cols].to_numpy()[rng.permutation(len(group))]
+        group[cf.SITUATION_COLS] = (
+            group[cf.SITUATION_COLS].to_numpy()[rng.permutation(len(group))])
 
-    location = location_design(group)
-    design, axis_slices = cf.build_design(group, location)
+    design, axis_slices = cf.build_design(group, location_design(group),
+                                          pc.control_matrix(group))
     observed = group[SHAPE].to_numpy(float)
-
     fits = cf.crossfit_shapes(design, observed)
     shape_actual = cf.predict_oof(design, fits, len(SHAPE))
-    design_cf = cf.desituate(design, axis_slices, AXIS_NAMES)
-    shape_cf = cf.predict_oof(design_cf, fits, len(SHAPE))
+    shape_cf = cf.predict_oof(cf.desituate(design, axis_slices, AXIS_NAMES),
+                              fits, len(SHAPE))
+    centered, axis_rows = cf.centered_situation(group)
+    displacement = (shape_actual - shape_cf) / scale
+    return {
+        "group": group, "design": design, "axis_slices": axis_slices, "fits": fits,
+        "observed": observed, "shape_actual": shape_actual, "shape_cf": shape_cf,
+        "displacement": displacement, "centered": centered, "axis_rows": axis_rows,
+        "policy": cf.fit_policy(centered, displacement),
+    }
 
-    def season_runs(shape_matrix, baseline):
-        return float((score_shapes(models, run_value_tables, group, shape_matrix)
-                      - baseline).sum() / N_SEASONS)
+
+def unit_record(models, run_value_tables, fit, scale, blocks=None, index=None,
+                n_replacements=cf.N_REPLACEMENTS, headline_only=False):
+    """Pass 2: run accounting against the replacement benchmark, alpha scan, per-dial gradients.
+
+    Returns the record plus two private keys the caller must pop: `_alpha_curve` (needed
+    only after the cohort-wide displacement cap is known) and `_prescriptions` (long rows
+    for the gradient parquet).
+
+    headline_only skips everything needing extra scoring passes; the split-half and
+    placebo checks need only the headline arms.
+    """
+    group, shape_cf = fit["group"], fit["shape_cf"]
+    shape_actual, observed = fit["shape_actual"], fit["observed"]
+    centered, displacement = fit["centered"], fit["displacement"]
+    scale = np.asarray([scale[f] for f in SHAPE], dtype=float)
+
+    def score_disp(disp_sd):
+        return score_shapes(models, run_value_tables, group, shape_cf + disp_sd * scale)
 
     xrv_cf = score_shapes(models, run_value_tables, group, shape_cf)
     xrv_actual = score_shapes(models, run_value_tables, group, shape_actual)
-
-    per_swing_delta = xrv_actual - xrv_cf
     is_two_strike = group["strikes"].to_numpy() == 2
 
     record = {
         "batter_id":    group["batter_id"].iloc[0],
         "batter_stand": group["batter_stand"].iloc[0],
         "n_swings":     len(group),
-        "runs_total":     float(per_swing_delta.sum() / N_SEASONS),
-        "runs_total_2k":  float(per_swing_delta[is_two_strike].sum() / N_SEASONS),
-        "runs_per_swing": float(per_swing_delta.mean()),
-        "xrv_actual_mean": float(xrv_actual.mean()),
-        "xrv_cf_mean":     float(xrv_cf.mean()),
+        "runs_vs_desituated": float((xrv_actual - xrv_cf).sum() / N_SEASONS),
+        "displacement_sd":    float(np.linalg.norm(displacement, axis=1).mean()),
+        "xrv_actual_mean":    float(xrv_actual.mean()),
+        "xrv_cf_mean":        float(xrv_cf.mean()),
     }
+
+    # Replacement arms. Each draw substitutes a randomly chosen other hitter's policy block —
+    # wholly for the headline, one axis at a time for the decomposition — and re-scores
+    # the same pitches. Averaging over draws is what makes the benchmark "a typical
+    # individual" rather than one arbitrary hitter.
+    if blocks is not None and n_replacements:
+        rng = np.random.default_rng(cf.SEED + index)
+        picks = rng.choice([j for j in range(len(blocks)) if j != index],
+                           size=min(n_replacements, len(blocks) - 1), replace=False)
+        full = np.zeros(len(group))
+        by_axis = {axis: np.zeros(len(group)) for axis in AXIS_NAMES}
+        for j in picks:
+            full += score_disp(centered @ blocks[j])
+            for axis in AXIS_NAMES:
+                swapped = cf.swap_axis(fit["policy"], blocks[j], fit["axis_rows"], axis)
+                by_axis[axis] += score_disp(centered @ swapped)
+        per_swing_delta = xrv_actual - full / len(picks)
+        record["n_replacements"] = len(picks)
+        record["runs_total"] = float(per_swing_delta.sum() / N_SEASONS)
+        record["runs_total_2k"] = float(per_swing_delta[is_two_strike].sum() / N_SEASONS)
+        record["runs_per_swing"] = float(per_swing_delta.mean())
+        axis_sum = 0.0
+        for axis in AXIS_NAMES:
+            value = float((xrv_actual - by_axis[axis] / len(picks)).sum() / N_SEASONS)
+            record[f"runs_{axis}"] = value
+            axis_sum += value
+        record["runs_interaction"] = record["runs_total"] - axis_sum
+
     if headline_only:
         return record
 
-    scale = np.asarray([scale[f] for f in SHAPE], dtype=float)
+    def season_runs(shape_matrix, baseline):
+        return float((score_shapes(models, run_value_tables, group, shape_matrix)
+                      - baseline).sum() / N_SEASONS)
 
     axis_shapes = {}
-    axis_sum = 0.0
     for axis in AXIS_NAMES:
         others = [a for a in AXIS_NAMES if a != axis]
-        design_one = cf.desituate(design, axis_slices, others)
-        shape_one = cf.predict_oof(design_one, fits, len(SHAPE))
-        axis_shapes[axis] = shape_one
-        value = season_runs(shape_one, xrv_cf)
-        record[f"runs_{axis}"] = value
-        axis_sum += value
-    record["runs_interaction"] = record["runs_total"] - axis_sum
+        design_one = cf.desituate(fit["design"], fit["axis_slices"], others)
+        axis_shapes[axis] = cf.predict_oof(design_one, fit["fits"], len(SHAPE))
 
     # The observed-percentile envelope stays as a hard rail. It is no longer the binding
     # constraint — it is built from observed shapes, whose execution noise (~1.5 SD) dwarfs
@@ -264,7 +328,6 @@ def unit_record(models, run_value_tables, group, scale=None,
     record["alpha_peak_at_boundary"] = bool(
         admissible and peak in (min(admissible), max(admissible))
     )
-    record["displacement_sd"] = cf.mean_displacement(shape_actual, shape_cf, scale)
 
     for axis in AXIS_NAMES:
         axis_curve = {}
@@ -312,6 +375,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--repeg", action="store_true",
+                        help="recompute the displacement cap and rewrite the reference")
     args = parser.parse_args()
 
     models = load_models()
@@ -327,22 +392,34 @@ def main():
         return
 
     reference = load_policy_reference(swings)
+    scale = reference["shape_sd"]
     groups = list(swings.groupby(KEY, observed=True, sort=False))
     if args.limit:
         groups = groups[:args.limit]
 
+    print(f"pass 1: fitting {len(groups)} unit policies")
+    fitted = [unit_fit(group.reset_index(drop=True), np.asarray(
+        [scale[f] for f in SHAPE], float)) for _, group in groups]
+    blocks = [f["policy"] for f in fitted]
+
+    print(f"pass 2: scoring arms ({cf.N_REPLACEMENTS} replacements per unit)")
     records, curves, gradient_rows = [], [], []
-    for i, (_, group) in enumerate(groups, 1):
-        record = unit_record(models, run_value_tables, group.reset_index(drop=True),
-                             scale=reference["shape_sd"])
+    for i, fit in enumerate(fitted):
+        record = unit_record(models, run_value_tables, fit, scale, blocks, i)
         curves.append(record.pop("_alpha_curve"))
         gradient_rows.extend(record.pop("_prescriptions"))
         records.append(record)
-        if i % 25 == 0:
-            print(f"  {i}/{len(groups)} units")
+        if (i + 1) % 25 == 0:
+            print(f"  {i + 1}/{len(fitted)} units")
     df = pd.DataFrame(records)
 
     # Admit only levels of situational modulation major-league hitters actually sustain.
+    # The cap is a quantile of FITTED displacement, so it is tied to the shape design and
+    # must be re-pegged whenever that changes (adding the pitch-characteristic controls
+    # shrank displacements, which would leave an old cap non-binding). `shape_sd` is a raw
+    # league scale and stays frozen across re-pegs.
+    if args.repeg:
+        reference["displacement_cap"] = None
     if reference["displacement_cap"] is None:
         reference["displacement_cap"] = float(
             df["displacement_sd"].quantile(cf.POLICY_QUANTILE))
@@ -386,16 +463,19 @@ def main():
     print(f"\nWrote {len(df)} rows -> {out}")
     print(f"Wrote {len(gradients)} rows -> {grad_out}")
 
-    if not args.limit and not POLICY_REF.exists():
+    if not args.limit and (args.repeg or not POLICY_REF.exists()):
         POLICY_REF.write_text(json.dumps(reference, indent=2) + "\n")
         print(f"Pegged policy reference -> {POLICY_REF}")
 
-    print("\n=== Season runs from situational adjustment ===")
+    print("\n=== Season runs vs a replacement hitter's policy ===")
     for col in ["runs_total", "runs_count", "runs_gamestate", "runs_platoon",
-                "runs_interaction", "runs_total_2k"]:
+                "runs_interaction", "runs_total_2k", "runs_vs_desituated"]:
         s = df[col]
-        print(f"  {col:<18} mean={s.mean():+6.2f}  median={s.median():+6.2f}  "
-              f"sd={s.std():5.2f}  range=[{s.min():+6.1f}, {s.max():+6.1f}]")
+        print(f"  {col:<20} mean={s.mean():+6.2f}  median={s.median():+6.2f}  "
+              f"sd={s.std():5.2f}  %pos={100 * (s > 0).mean():5.1f}  "
+              f"range=[{s.min():+6.1f}, {s.max():+6.1f}]")
+    print(f"\n  corr(runs_total, n_swings)  = {df['runs_total'].corr(df['n_swings']):+.3f}")
+    print(f"  corr(runs_total, swing_plus) = {df['runs_total'].corr(df['swing_plus']):+.3f}")
     resid = df["runs_interaction"].abs()
     print(f"\n  |interaction| mean={resid.mean():.2f}  max={resid.max():.2f}  "
           f"median % of |total|={100 * (resid / df['runs_total'].abs().clip(lower=0.1)).median():.0f}%")

@@ -1,4 +1,6 @@
-"""Swing adjustability — how much a hitter's swing tracks the situation, net of pitch location.
+"""How much a hitter changes his swing for the situation, once you account for where the pitch
+was. Location forces most of any swing, so this measures only what is left over that still
+moves with the count, the baserunners and the pitch type.
 
 Single-regression build. Per (batter, stand) unit (2024-25, >= MIN_SWINGS), for each of 3 volitional
 trait dials (bat_speed, swing_length, swing_path_tilt) we fit ONE regression of the dial on

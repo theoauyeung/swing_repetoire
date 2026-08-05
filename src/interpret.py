@@ -1,4 +1,6 @@
-""" Layer 1 — league swing-shape archetype lexicon.
+"""Gives every swing a name a coach would use — "Uppercut Pull", "Level Oppo" — instead of a
+number. The clustering step only knows "this hitter's cluster 1", which means nothing across
+hitters; this puts all of them on one shared vocabulary.
 
 Per-(batter, stand) clusters are strictly non-comparable (cluster.py); "Cluster 1" is a bare
 index. This builds a cross-unit *vocabulary* so every unit-cluster inherits a human-readable

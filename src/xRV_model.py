@@ -1,4 +1,6 @@
-"""Bespoke per-swing expected run value (xRV) via a swing-outcome decomposition.
+"""Grades a single swing in runs, using only what the hitter could know before contact. A swing
+either puts the ball in play, fouls it off, or misses it; three models predict which of those
+happens, and a run-value table turns those odds into runs.
 
 Conditioned on a competitive swing, the pitch either goes into play, is fouled, or is missed.
 Three XGBoost models estimate that outcome tree; a run-value layer (from the count/linear-weight

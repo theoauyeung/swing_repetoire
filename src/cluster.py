@@ -1,4 +1,6 @@
-""" per-(batter, stand) swing-shape clustering via Gaussian Mixture Models.
+"""Finds each hitter's distinct swings. Nobody has one swing — sorting a season of tracked swings
+by their measured shape shows most hitters have two or three they actually repeat, and this is
+what separates them.
 
 Clustering unit = (batter_id, batter_stand). A switch hitter's left- and right-handed swings
 are different movements; pooling them would let stance dominate the GMM (cluster 0 = "bats L",
