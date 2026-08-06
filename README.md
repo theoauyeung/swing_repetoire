@@ -11,7 +11,7 @@ Data: Driveline `mlb_db`. Methodology: `docs/research-design.md` and `docs/adjus
 
 ## What's built
 
-A per-batter GMM groups each hitter's swings into distinct shapes (median 2, max 6). An xRV model grades each shape against the pitch it met and scales it as **Swing+** (50 = league average). **Repertoire+** measures how wide that shape portfolio is. **Adjustability** measures how much bat speed, swing length and tilt track the situation once you account for where the pitch was. **Adjustment value** prices that movement in runs, by re-scoring each hitter's season under a different situational policy.
+A per-batter GMM groups each hitter's swings into distinct shapes (median 2, max 6). An xRV model grades each shape against the pitch it met and scales it as **Swing+** (50 = league average). **Repertoire+** measures how wide that shape portfolio is. **Adjustability** measures how much bat speed, swing length and tilt track the situation once you account for where the pitch was. **Adjustment value** prices that movement in runs, by re-scoring each hitter's season under a different situational policy. The **playbook** turns the price into an instruction — which dial to move, in which situation, by how many degrees.
 
 ![pipeline](results/plots/adjustability/value_flowchart.png)
 
@@ -52,13 +52,17 @@ python src/adjustability_value.py               # ~10 min
 python src/uncommited/adjustability_value_validate.py      # ~25 min; --reuse skips the split-half recompute
 #   → results/adjustability_value.md
 
-python src/adjustability_policy.py              # what he should do instead
-#   → adjustability_prescriptions.parquet
+python src/adjustability_policy.py              # what he should do instead   ~25 min
+#   → adjustability_prescriptions.parquet, adjustability_playbook.parquet
+#   → results/adjustability_playbook.md
+#   --report-only re-runs just the readout (seconds), against the search already on disk
 ```
 
-`src/adjustability_value.py` reads top to bottom as one procedure — load, fit one hitter's swing rule, price a shape in runs, compare against a replacement, then the two prescription layers — with a numbered map in its module docstring. `tests/test_adjustability_value.py` pins the properties the argument depends on (the comparison swing is mean-preserving, the three axes sum to the total, every swing is predicted out of fold). `src/uncommited/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
+`adjustability_policy.py` is the one policy script, in two stages. The **search** tries a grid of signed steps on each dial, in each situation, and keeps the one worth the most runs — rejecting any swing the hitter has not already demonstrated. The **readout** turns those steps into instructions in the dial's own units ("with two strikes, swing 5.3° more level"), and pools them into a league policy and a power-vs-contact policy.
 
-An earlier design varied the situation instead and watched realized run value (matched two-strike / base-state / platoon penalties). It is retired and lives in `trash/adjustability_penalties.py`; its penalty columns are frozen in `adjustability.parquet` and are still read for the convergent-validity check.
+Every row says which of three levels to read it at — one batter, a hitter type, or the league — based on a split-half gate (`experiments/policy_search_gate.py`, which re-runs each season end to end). Count prescriptions repeat per batter; game-state ones only hold up as a league statement. Nothing is dropped for being noisy: an axis with a weak per-hitter number can still have a real league mean, and the annotation says so instead of hiding it.
+
+`src/adjustability_value.py` reads top to bottom as one procedure — load, fit one hitter's swing rule, price a shape in runs, compare against a replacement, then the two prescription layers — with a numbered map in its module docstring. `tests/test_adjustability_value.py` pins the properties the argument depends on (the comparison swing is mean-preserving, the three axes sum to the total, every swing is predicted out of fold). `src/uncommited/pitch_controls.py` joins the pitch characteristics that keep a reaction to nastier stuff from being scored as volition.
 
 **Presentation.**
 

@@ -3,11 +3,31 @@ it with two strikes, aim more up the middle against a same-handed arm. Every sug
 re-graded through the run-value model and thrown out unless he has already shown he can make
 that swing.
 
+Two stages, in one file because they are one idea:
+
+  1. SEARCH   per unit x axis x lever, the signed step that buys the most runs under a
+              mean-preserving ordinal contrast, subject to an envelope rail and a repertoire
+              rail. Slow (~25 min): every candidate shape is re-scored through xRV.
+  2. READOUT  turns those steps into instructions in the dial's own units, annotates each
+              with how well it repeats, and pools them into a league policy and a
+              power/contact policy. Seconds.
+
+`--report-only` runs stage 2 against the parquet stage 1 already wrote, which is what you
+want whenever the wording or the pooling changes but the search does not.
+
+The reliability annotation says which of three levels a cell should be read at, and never
+excludes: count steps repeat per batter, gamestate steps only hold up as a cohort statement,
+platoon sits between. An axis with a weak per-hitter number still has a real league mean.
+
 Input : data/adjustability_gradients.parquet (cell gradients, from adjustability_value.py)
-Output: data/adjustability_prescriptions.parquet (unit x axis x cell)
-Run   : python src/adjustability_policy.py [--limit N]
+        data/adjustability_policy_reliability.parquet (from experiments/policy_search_gate.py)
+Output: data/adjustability_prescriptions.parquet  (unit x axis x lever, the raw search)
+        data/adjustability_playbook.parquet       (the same rows, as instructions)
+        results/adjustability_playbook.md
+Run   : python src/adjustability_policy.py [--limit N] [--report-only]
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -19,7 +39,7 @@ DATA = ROOT / "data"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import adjustability_value as av                                     # noqa: E402
-from adjustability import KEY                                        # noqa: E402
+from adjustability import KEY, SEASONS                               # noqa: E402
 
 SHAPE = av.SHAPE
 # bat_speed is NOT prescribable. Within a hitter his hardest swings whiff less (27% -> 19%),
@@ -44,6 +64,37 @@ CENTROID_COLS = {"swing_path_tilt": "swing_path_tilt_mean",
                  "bat_speed": "bat_speed_mean",
                  "vert_attack_angle": "vert_attack_angle_mean",
                  "horz_attack_angle_pull": "horz_attack_angle_mean"}
+
+# --- stage 2 vocabulary -------------------------------------------------------------------
+# How each axis reads out loud. The high pole is the +1 end of the ordinal contrast, so a
+# positive `step_sd` means "more of this dial at the high pole than at the low pole".
+POLES = {
+    "count":     ("with two strikes", "early in the count"),
+    "gamestate": ("with runners on", "with the bases empty"),
+    "platoon":   ("vs a same-handed arm", "vs an opposite-handed arm"),
+}
+DIAL_WORDS = {
+    "swing_path_tilt":        ("steepen", "flatten"),
+    "swing_length":           ("lengthen", "shorten"),
+    "vert_attack_angle":      ("swing more uphill", "swing more level"),
+    "horz_attack_angle_pull": ("aim more to pull", "aim more to oppo"),
+}
+# The search works in league SD because that is the only scale on which four different
+# quantities are comparable, but nobody can act on "0.5 SD". These convert back to the units
+# the dial is actually measured in, using the same frozen league scale the search used.
+LEAGUE_SD = json.loads(av.POLICY_REF.read_text())["shape_sd"]
+# dial -> (multiplier from the raw feature's unit to the display unit, suffix, name)
+UNITS = {
+    "swing_path_tilt":        (1.0, "°", "degrees of tilt"),
+    "swing_length":           (12.0, '"', "inches of swing length"),
+    "vert_attack_angle":      (1.0, "°", "degrees of attack angle"),
+    "horz_attack_angle_pull": (1.0, "°", "degrees of aim"),
+}
+# Where a prescription should be read. Split-half r on the step itself for the per-batter
+# number; sign agreement (chance = 0.50) for whether at least the DIRECTION repeats.
+STEP_R_BATTER = 0.40
+SIGN_AGREE_DIRECTION = 0.55
+TYPE_QUANTILE = 0.25
 
 
 def load_centroids(scale):
@@ -237,19 +288,201 @@ def unit_prescriptions(models, run_value_tables, hitter, gradients, centroids, s
     return rows
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=None)
-    args = parser.parse_args()
+# ----------------------------------------------------------------------------------------
+# Stage 2: the readout
+# ----------------------------------------------------------------------------------------
 
+
+def hitter_types():
+    """Power / Balanced / Contact from bat speed and whiff rate over the cohort seasons.
+
+    Same split the 2026-08-04 gradient work used: the two z-scores correlate -0.55, so their
+    difference is a real axis rather than a restatement of either one.
+    """
+    swings = pd.read_parquet(DATA / "swings_model.parquet",
+                             columns=KEY + ["game_year", "bat_speed", "is_whiff"])
+    swings = swings[swings["game_year"].isin(SEASONS)]
+    per_unit = swings.groupby(KEY, observed=True).agg(
+        bat_speed_mean=("bat_speed", "mean"), whiff_rate=("is_whiff", "mean")).reset_index()
+
+    power_z = ((per_unit["bat_speed_mean"] - per_unit["bat_speed_mean"].mean())
+               / per_unit["bat_speed_mean"].std())
+    contact_z = -((per_unit["whiff_rate"] - per_unit["whiff_rate"].mean())
+                  / per_unit["whiff_rate"].std())
+    per_unit["power_contact_z"] = power_z - contact_z
+
+    low = per_unit["power_contact_z"].quantile(TYPE_QUANTILE)
+    high = per_unit["power_contact_z"].quantile(1 - TYPE_QUANTILE)
+    per_unit["hitter_type"] = np.select(
+        [per_unit["power_contact_z"] >= high, per_unit["power_contact_z"] <= low],
+        ["Power", "Contact"], default="Balanced")
+    return per_unit
+
+
+def to_native(lever, step_sd):
+    """A step in league SD converted to the dial's own unit. NaN for the gradient mix, which
+    moves four dials at once and so has no single unit."""
+    if lever not in UNITS:
+        return float("nan")
+    multiplier, _, _ = UNITS[lever]
+    return step_sd * LEAGUE_SD[lever] * multiplier
+
+
+def instruction(axis, lever, step):
+    """One sentence a coach can say, in the dial's own units."""
+    high, low = POLES[axis]
+    if step == 0:
+        return f"{high}: no change from how he swings {low}"
+    if lever == "gradient":
+        # The gradient mix moves all four dials at once; it prices the ceiling a hitter could
+        # reach, not an instruction, so it is described rather than phrased as advice.
+        return f"{high}: best mixed move is {abs(step):.2f} SD along his situational gradient"
+    up, down = DIAL_WORDS[lever]
+    _, suffix, name = UNITS[lever]
+    verb = up if step > 0 else down
+    return (f"{high}: {verb} by {abs(to_native(lever, step)):.1f}{suffix} "
+            f"({name}) relative to {low}")
+
+
+def read_at(step_r, sign_agree):
+    """Which level this (axis, dial) cell should be read at, from the split-half gate."""
+    if step_r >= STEP_R_BATTER:
+        return "batter"
+    if sign_agree >= SIGN_AGREE_DIRECTION:
+        return "batter (direction only)"
+    return "type / league"
+
+
+def build_playbook(prescriptions):
+    reliability = pd.read_parquet(DATA / "adjustability_policy_reliability.parquet")
+    value = pd.read_parquet(DATA / "adjustability_value.parquet")
+
+    playbook = prescriptions.merge(reliability[["axis", "lever", "step_r", "sign_agree",
+                                                "runs_gain_r"]], on=["axis", "lever"])
+    playbook = playbook.merge(value[KEY + ["label", "swing_plus", "adj_count"]], on=KEY)
+    playbook = playbook.merge(hitter_types(), on=KEY)
+
+    playbook["step_native"] = [to_native(lever, step) for lever, step
+                               in zip(playbook["lever"], playbook["step_sd"])]
+    playbook["step_unit"] = [UNITS[lever][1] if lever in UNITS else ""
+                             for lever in playbook["lever"]]
+    playbook["instruction"] = [instruction(axis, lever, step) for axis, lever, step
+                               in zip(playbook["axis"], playbook["lever"],
+                                      playbook["step_sd"])]
+    playbook["read_at"] = [read_at(r, a) for r, a
+                           in zip(playbook["step_r"], playbook["sign_agree"])]
+    return playbook.sort_values(KEY + ["axis", "runs_gain_insample"],
+                                ascending=[True, True, True, False])
+
+
+def pooled_policy(playbook, group_cols):
+    """The cohort's own prescription for each axis x dial: direction, size, and what it pays.
+
+    `share_positive` is the vote — among the hitters the search moves, the fraction moved
+    toward the high pole of the axis — and is the part that survives at the league level even
+    where the per-batter step does not repeat.
+    """
+    single = playbook[playbook["lever"].isin(LEVERS)].copy()
+    # runs_gain is a one-season total, so comparing buckets on it would rank playing time.
+    # n_swings spans both seasons.
+    single["runs_gain_per_100"] = (single["runs_gain"]
+                                   / (single["n_swings"] / len(SEASONS)) * 100)
+    rows = []
+    for keys, block in single.groupby(group_cols, observed=True):
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        moved = block[block["step_sd"] != 0]
+        rows.append({
+            **dict(zip(group_cols, keys)),
+            "n_units": len(block),
+            "share_moved": round(float((block["step_sd"] != 0).mean()), 3),
+            # The vote is taken among hitters the search actually moves. Over everyone it is
+            # diluted by the ~30% left at the status quo, which are abstentions, not votes.
+            "share_positive": round(float((moved["step_sd"] > 0).mean()), 3) if len(moved) else 0.0,
+            "median_step": round(float(moved["step_native"].median()), 2) if len(moved) else 0.0,
+            "mean_step": round(float(block["step_native"].mean()), 2),
+            "unit": block["step_unit"].iloc[0],
+            "mean_runs_gain": round(float(block["runs_gain"].mean()), 3),
+            "runs_gain_per_100": round(float(block["runs_gain_per_100"].mean()), 3),
+            "read_at": block["read_at"].iloc[0],
+        })
+    return pd.DataFrame(rows)
+
+
+def markdown_report(playbook, league, by_type):
+    lines = ["# Adjustability playbook", "",
+             f"{playbook[KEY].drop_duplicates().shape[0]} units, {SEASONS[0]}-{SEASONS[-1]}. "
+             "Steps are in each dial's own units (degrees of angle, inches of swing length), "
+             "signed toward the high pole of each axis. `mean_runs_gain` is priced on the "
+             "held-out season.", ""]
+
+    lines += ["## League policy", "",
+              "What the search asks of the average hitter. `share_positive` is the cohort's "
+              "vote on direction; read it where the per-batter step does not repeat.", ""]
+    for axis in CONTRASTS:
+        high, low = POLES[axis]
+        block = league[league["axis"] == axis].sort_values("mean_runs_gain", ascending=False)
+        lines += [f"### {axis} — {high} vs {low}", "",
+                  block.drop(columns=["axis"]).to_markdown(index=False), ""]
+
+    lines += ["## By hitter type", "",
+              "Power / Contact are the outer quartiles of z(bat speed) - z(contact rate); "
+              "the middle half is Balanced.", ""]
+    for axis in CONTRASTS:
+        block = by_type[by_type["axis"] == axis]
+        pivot = block.pivot(index="lever", columns="hitter_type", values="mean_step")
+        gains = block.pivot(index="lever", columns="hitter_type",
+                            values="runs_gain_per_100")
+        lines += [f"### {axis}", "",
+                  "Mean prescribed step (degrees, except swing length in inches):", "",
+                  pivot.round(2).to_markdown(), "",
+                  "Held-out runs gained per 100 swings:", "",
+                  gains.round(3).to_markdown(), ""]
+
+    lines += ["## Where each prescription is readable", "",
+              playbook.drop_duplicates(["axis", "lever"])[
+                  ["axis", "lever", "step_r", "sign_agree", "runs_gain_r", "read_at"]
+              ].sort_values(["axis", "lever"]).to_markdown(index=False), ""]
+
+    lines += ["## Sample batter cards", "",
+              "Two per type, taken at each type's median total gain. Picking the largest "
+              "totals instead would just surface the hitters with the most swings.", ""]
+    # runs_gain is NaN for units that only reach the swing floor in one season, so they have
+    # no held-out price and cannot be carded.
+    single = playbook[playbook["lever"].isin(LEVERS) & (playbook["step_sd"] != 0)]
+    single = single.dropna(subset=["runs_gain"])
+    best = single.loc[single.groupby(KEY + ["axis"])["runs_gain"].idxmax()]
+
+    totals = best.groupby(["hitter_type", "label"])["runs_gain"].sum().reset_index()
+    shown = []
+    for _, block in totals.groupby("hitter_type"):
+        ranked = block.sort_values("runs_gain").reset_index(drop=True)
+        middle = len(ranked) // 2
+        shown.extend(ranked.loc[middle:middle + 1, "label"])
+    for label in shown:
+        card = best[best["label"] == label]
+        lines += [f"### {label} ({card['hitter_type'].iloc[0]})", ""]
+        for _, row in card.iterrows():
+            lines.append(f"- **{row['axis']}** — {row['instruction']} "
+                         f"({row['runs_gain']:+.2f} runs held out, read at {row['read_at']})")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------------------------------
+
+
+def search(limit=None):
+    """Stage 1. Re-scores every candidate shape through xRV, so this is the slow half."""
     models, run_value_tables, swings, reference = av.load_data()
     scale = np.asarray([reference["shape_sd"][feature] for feature in SHAPE], float)
     centroids = load_centroids(scale)
     all_gradients = pd.read_parquet(DATA / "adjustability_gradients.parquet")
 
     groups = list(swings.groupby(KEY, observed=True, sort=False))
-    if args.limit:
-        groups = groups[:args.limit]
+    if limit:
+        groups = groups[:limit]
     print(f"{len(groups)} units, searching {len(STEP_GRID)} steps "
           f"x {len(SHAPE) + 1} directions per cell")
 
@@ -265,22 +498,32 @@ def main():
             print(f"  {i}/{len(groups)} units", flush=True)
 
     prescriptions = pd.DataFrame(rows)
-    suffix = "_subset" if args.limit else ""
+    suffix = "_subset" if limit else ""
     output_path = DATA / f"adjustability_prescriptions{suffix}.parquet"
     prescriptions.to_parquet(output_path, index=False)
     print(f"\nWrote {len(prescriptions)} rows -> {output_path}")
+    return prescriptions
 
-    print("\n=== Runs left on the table (mean-preserving contrast), by axis x lever ===")
-    for name, col in [("held-out season", "runs_gain"), ("in-sample", "runs_gain_insample")]:
-        print(f"\n  {name}:")
-        by_lever = prescriptions.pivot_table(index="lever", columns="axis",
-                                             values=col, aggfunc="mean")
-        print(by_lever.round(3).to_string())
 
-    print("\n=== Prescribed step, in league SD, where the search moves off status quo ===")
-    moved = prescriptions[prescriptions["step_sd"] != 0]
-    steps = moved.pivot_table(index="lever", columns="axis", values="step_sd", aggfunc="median")
-    print(steps.round(3).to_string())
+def report(prescriptions):
+    """Stage 2. Cheap: no model calls, just the search output turned into instructions."""
+    playbook = build_playbook(prescriptions)
+    out = DATA / "adjustability_playbook.parquet"
+    playbook.to_parquet(out, index=False)
+    print(f"\nWrote {len(playbook)} rows -> {out}")
+
+    league = pooled_policy(playbook, ["axis", "lever"])
+    by_type = pooled_policy(playbook, ["axis", "lever", "hitter_type"])
+
+    print("\n=== League policy: prescribed step in the dial's own units, and what it pays ===")
+    print(league.to_string(index=False))
+
+    print("\n=== By hitter type: mean prescribed step ===")
+    for axis in CONTRASTS:
+        block = by_type[by_type["axis"] == axis]
+        print(f"\n  {axis}:")
+        print(block.pivot(index="lever", columns="hitter_type",
+                          values="mean_step").round(2).to_string())
 
     print("\n=== How often each lever is the axis winner ===")
     winners = prescriptions.loc[
@@ -288,22 +531,40 @@ def main():
     print(pd.crosstab(winners["lever"], winners["axis"]).to_string())
 
     at_status_quo = 100 * (prescriptions["step_sd"] == 0).mean()
-    print(f"\n  status quo already optimal: {at_status_quo:.1f}% "
-          f"of (unit, axis, lever) cells")
+    print(f"\n  status quo already optimal: {at_status_quo:.1f}% of (unit, axis, lever) cells")
     print(f"  held-out gain positive: {100 * (prescriptions['runs_gain'] > 0).mean():.1f}%")
     print(f"  mean feasible steps per lever: {prescriptions['n_feasible'].mean():.1f} "
           f"of {len(STEP_GRID)}")
+    counts = playbook.drop_duplicates(KEY)["hitter_type"].value_counts()
+    print(f"  hitter types: {counts.to_dict()}")
 
     # The gradient mix is a ceiling, not advice a coach can give, so the roll-up counts
     # only the single-dial winners.
     print("\n  best single-dial gain per unit-axis, summed over axes:")
     single_dial_winners = winners[winners["lever"] != "gradient"]
-    if len(single_dial_winners):
-        best_dial_runs = single_dial_winners.groupby(KEY)["runs_gain"].sum()
-    else:
-        best_dial_runs = pd.Series(dtype=float)
+    best_dial_runs = single_dial_winners.groupby(KEY)["runs_gain"].sum()
     print(f"    mean {best_dial_runs.mean():+.3f}  median {best_dial_runs.median():+.3f}  "
           f"max {best_dial_runs.max():+.3f} season runs")
+
+    report_path = ROOT / "results" / "adjustability_playbook.md"
+    report_path.write_text(markdown_report(playbook, league, by_type))
+    print(f"\nWrote {report_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--report-only", action="store_true",
+                        help="skip the search and re-read the prescriptions parquet")
+    args = parser.parse_args()
+
+    if args.report_only:
+        suffix = "_subset" if args.limit else ""
+        prescriptions = pd.read_parquet(
+            DATA / f"adjustability_prescriptions{suffix}.parquet")
+    else:
+        prescriptions = search(args.limit)
+    report(prescriptions)
 
 
 if __name__ == "__main__":

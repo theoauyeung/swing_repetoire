@@ -196,14 +196,6 @@ def learn_how_he_swings(swings, league_sd, shuffle_seed=None):
     stay at their observed values in every reading; without them the situation dummies
     absorb count-correlated velocity and break, and the hitter's mechanical reaction to
     harder stuff gets scored as a deliberate adjustment.
-
-    Every reading is CROSS-FITTED — predicted with coefficients estimated on other folds.
-    The headline is a difference between two of these readings, so in-sample fits would let
-    ~20 situation dummies manufacture situational signal out of noise, and that noise would
-    not cancel in the difference unless both readings use the same fold.
-
-    `shuffle_seed` permutes the situation columns within the hitter, destroying any real
-    situation-shape relationship while preserving the marginals. That is the placebo.
     """
     if shuffle_seed is not None:
         rng = np.random.default_rng(shuffle_seed)
@@ -300,9 +292,6 @@ def learn_how_he_swings(swings, league_sd, shuffle_seed=None):
 def runs_for(models, run_value_tables, swings, shape):
     """Expected run value PER SWING if he had made `shape` on each of these same pitches.
 
-    Uses assemble_xrv, not the count-neutral variant, so two-strike stakes stay live: the
-    mechanism under test is whether compressing the swing buys enough contact to pay for the
-    strikeout risk, and that risk only exists if the count-aware run values are in play.
     """
     frame = swings.copy()
     for dial_index, feature in enumerate(SHAPE):
@@ -322,18 +311,6 @@ def value_against_replacement(models, run_value_tables, hitter, league_sd,
                               everyones_blocks=None, index=None,
                               n_replacements=N_REPLACEMENTS):
     """Season runs his adjusting is worth against a randomly drawn peer's.
-
-    "Replacement" here means a randomly drawn hitter from this same cohort, NOT WAR's
-    replacement level — the bar is an average big-league adjuster, not a fringe one. That
-    choice is the whole design. Against a frozen swing instead, 96% of hitters "gain" and
-    the number is mostly playing time; against a POOLED league policy only 25% clear the
-    bar, because a smoothed average wins by being smooth rather than by being right. A
-    random individual is precision-matched — his fitted block carries the same estimation
-    noise the hitter's own does — so the result is two-sided by construction.
-
-    Averaging over draws is what makes the benchmark "a typical peer" rather than one
-    arbitrary hitter. Passing `everyones_blocks=None` returns only the vs-frozen-swing
-    quantity, which is all the placebo and split-half checks need.
     """
     swings = hitter.swings
     xrv_situation_off = runs_for(models, run_value_tables, swings, hitter.with_situation_off)
@@ -555,6 +532,10 @@ def write_and_report(unit_table, gradient_rows, alpha_curves, reference, suffix,
     unit_table["runs_at_alpha_star"] = runs_at_alpha_star
     unit_table["runs_at_alpha_star_per_swing"] = (
         unit_table["runs_at_alpha_star"] * N_SEASONS / unit_table["n_swings"])
+    # The slope is a season-runs total, so it carries playing time (corr with n_swings +0.58).
+    # Any cross-hitter read uses the rate.
+    unit_table["marginal_runs_per_alpha_per_swing"] = (
+        unit_table["marginal_runs_per_alpha"] * N_SEASONS / unit_table["n_swings"])
 
     # Per-unit mean xrv_grade_neutral. The count-NEUTRAL grade is used so this control for
     # hitter quality is not itself confounded by count distribution.
